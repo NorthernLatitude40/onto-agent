@@ -1,6 +1,6 @@
 import httpx
 from langchain_core.tools import tool
-from src.config import ANYTHINGLLM_BASE_URL, ANYTHINGLLM_API_KEY, WORKSPACE_SLUG
+from src.config.config import ANYTHINGLLM_BASE_URL, ANYTHINGLLM_API_KEY, WORKSPACE_SLUG
 
 
 @tool

@@ -1,7 +1,8 @@
 import streamlit as st
 import traceback
 
-def run_ui(worker):
+
+def run_ui(harness):
     """
     負責 Streamlit 介面渲染。
     接收重構後的 AgentWorker 實例，透過純同步流程（sync_invoke）
@@ -15,8 +16,8 @@ def run_ui(worker):
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
             {
-                "role": "assistant", 
-                "content": "您好！我已經成功外掛了 AnythingLLM 知識庫與網路版 MySQL 資料庫。請隨時提問客服問題或要求我跑評估測試集。"
+                "role": "assistant",
+                "content": "您好！我已經成功外掛了 AnythingLLM 知識庫與網路版 MySQL 資料庫。請隨時提問客服問題或要求我跑評估測試集。",
             }
         ]
 
@@ -31,29 +32,28 @@ def run_ui(worker):
         with st.chat_message("user"):
             st.write(user_query)
         st.session_state.chat_history.append({"role": "user", "content": user_query})
-        
+
         # 建立 AI 的對話氣泡
         with st.chat_message("assistant"):
-            # 引入 st.spinner 動畫，提供良好的使用者體驗
-            with st.spinner("Agent 決策中..."):
-                config = {"configurable": {"thread_id": "ticket_agent_stream_network"}}
-                inputs = {"messages": [("user", user_query)]}
-                
+            # 引入 st.spinner 動畫
+            with st.spinner("Harness 運行殼調度內核決策中..."):
                 try:
-                    # 🌟 核心：調用傳入的 worker 實例進行同步橋接
-                    result = worker.sync_invoke(inputs, config)
-                    
-                    # 解析 AgentCore 返回的最後一則模型回覆
-                    final_reply = result["messages"][-1].content
-                    
-                    # 將結果呈現在 UI 上，並寫入歷史紀錄
+                    # 🌟 核心修改點：直接呼叫 Harness 封裝好的簡潔業務接口
+                    # 為網頁端分配專屬的 thread_id，與 API 端完全隔絕
+                    final_reply = harness.interact(
+                        user_message=user_query, thread_id="streamlit_default_user"
+                    )
+
+                    # 將純文字結果直接呈現在 UI 上，並寫入歷史紀錄
                     st.write(final_reply)
-                    st.session_state.chat_history.append({"role": "assistant", "content": final_reply})
-                    
-                except Exception as final_error:
-                    # 在後台控制台列印詳細的錯誤軌跡（Traceback），方便開發者 Debug
-                    print("❌ [Agent 執行階段崩潰] 詳細錯誤軌跡如下：")
-                    traceback.print_exc() 
-                    
-                    # 同時在網頁前端彈出醒目的紅框錯誤提示，防止介面卡死死白
-                    st.error(f"🛑 系統錯誤詳細資訊：{str(final_error)}")
+                    st.session_state.chat_history.append(
+                        {"role": "assistant", "content": final_reply}
+                    )
+
+                except Exception as e:
+                    # 容錯處理：後台列印軌跡，前端彈出紅框
+                    import traceback
+
+                    print("❌ [Harness 執行階段崩潰] 詳細錯誤軌跡如下：")
+                    traceback.print_exc()
+                    st.error(f"🛑 駕馭層（Harness）捕獲異常：{str(e)}")

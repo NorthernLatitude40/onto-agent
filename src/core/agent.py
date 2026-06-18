@@ -7,8 +7,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
-from src.config import GEMINI_API_KEY, OPENROUTER_API_KEY
-from src.tool.tools import get_weather, search_official_knowledge_base
+from src.config.config import GEMINI_API_KEY, OPENROUTER_API_KEY
+from core.tools import get_weather, search_official_knowledge_base
 
 
 class State(TypedDict):

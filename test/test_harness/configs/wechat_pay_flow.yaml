@@ -1,8 +1,8 @@
-# test/agent_harness/configs/wechat_pay_flow.yaml
 name: wechat_pay_flow
 target_agent_endpoint: "http://localhost:8000/agent" # 你的 LangGraph Agent 運行端口
-timeout: 15,  // 👈 把這裡的 5 改成 15 或 20 (單位通常是秒)
-cases:
+timeout: 15 # 標準 YAML 註解請使用井字號，且前方不要有逗號
+
+test_cases: # 👈 這裡改成對齊腳本的 test_cases
   - input: "我是張小明（user_id: 1），我想買 2 個保溫隨行杯（product_id: 4，單價 790），幫我下單。"
     expected: "觸發微信支付預下單 API，並返回支付link"
   - input: "我已經付款完成，幫我檢查剛才訂單的狀態"
