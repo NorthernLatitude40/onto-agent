@@ -1,0 +1,36 @@
+@prefix ex: <http://example.org/ontology/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+# ==========================================
+# 1. Ontology 定義 (Schema 層)
+# ==========================================
+
+# 定義 Customer 及其子類 VIPCustomer
+ex:Customer a owl:Class .
+ex:VIPCustomer a owl:Class ;
+    rdfs:subClassOf ex:Customer .
+
+# 定義 Product 及其子類 ElectronicProduct
+ex:Product a owl:Class .
+ex:ElectronicProduct a owl:Class ;
+    rdfs:subClassOf ex:Product .
+
+# 定義購買關係
+ex:bought a owl:ObjectProperty ;
+    rdfs:domain ex:Customer ;
+    rdfs:range ex:Product .
+
+
+# ==========================================
+# 2. 實例數據 定義 (Instance/Data 層)
+# ==========================================
+
+# 張三1 是 VIPCustomer
+ex:ZhangSan1 a ex:VIPCustomer .
+
+# iPhone151 是 ElectronicProduct
+ex:iPhone151 a ex:ElectronicProduct .
+
+# 張三11 買過 iPhone151
+ex:ZhangSan1 ex:bought ex:iPhone151 .
