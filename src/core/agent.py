@@ -1,4 +1,4 @@
-# core/agent.py
+# # core/agent.py
 import time
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, START
@@ -17,35 +17,33 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
 
 
-# 在類別的 __init__ 中，或者模組的全局位置定義：
-GEMINI_AVAILABLE = True  # 默認主要模型可用
-
-
 class Agent:
     def __init__(self, mcp_tools=None):
         self.tools = [get_weather, search_official_knowledge_base] + (mcp_tools or [])
         self.tool_node = ToolNode(self.tools)
+
+        # 💡 將熔斷標記綁定在實例上，避免多用戶併發時互相干擾
+        self.gemini_available = True
+
         self.app = self._build_graph()
 
     def _model(self):
-        # 🎯 核心：這裡一定要綁定完備的 tools，LangChain 會自動幫我們把 Schema 傳給 Gemini
+        # 🎯 提示：如果想嘗試消除 additionalProperties 警告，可以嘗試 strict=False（取決於 langchain 版本）
         gemini = ChatGoogleGenerativeAI(
-            model="gemini-3.5-flash", api_key=GEMINI_API_KEY, temperature=0
-        ).bind_tools(self.tools)
+            model="gemini-2.5-flash", api_key=GEMINI_API_KEY, temperature=0
+        ).bind_tools(self.tools, strict=False)
 
         openrouter = ChatOpenAI(
             model="google/gemma-4-31b-it:free",
-            # model="meta-llama/llama-3-8b-instruct:free",
             openai_api_key=OPENROUTER_API_KEY,
             openai_api_base="https://openrouter.ai/api/v1",
             temperature=0,
         ).bind_tools(self.tools)
 
         def call(state: State):
-            global GEMINI_AVAILABLE  # 引入全局或類別狀態變數
+            # 💡 透過閉包直接讀寫實例屬性，不再需要 global
             current_messages = state["messages"]
 
-            # 🛠️ 乾淨、精準的提示詞，明確告訴它你已經是圖譜分析師，且直接給答案
             sys = (
                 "你現在是紐西蘭巴士旅遊（Kiwi Experience）官方售票網站的「智慧客服兼知識圖譜分析師」。你具備調用多個後端工具的能力，必須根據用戶的自然語言意圖，做出最正確的工具調用決策。\n\n"
                 "【資料庫圖結構知識 (Schema & Context)】\n"
@@ -78,19 +76,19 @@ class Agent:
             messages_with_sys = [("system", sys)] + current_messages
             response = None
 
-            # 🌟 核心改動：根據熔斷標記，動態選擇調用路徑
-            if GEMINI_AVAILABLE:
+            # 🌟 根據實例的熔斷標記動態選擇
+            if self.gemini_available:
                 try:
                     print("🔄 正在嘗試使用 [主要模型: Gemini] 處理請求...")
                     response = gemini.invoke(messages_with_sys)
                     print("🎉 [Gemini] 請求成功！")
                 except Exception as gemini_error:
                     print(f"⚠️ [Gemini] 發生異常: {gemini_error}")
-                    # 💡 觸發 429 或其他異常，立刻拉下電閘（熔斷）
-                    GEMINI_AVAILABLE = False
-                    print(
-                        "🚨 [熔斷觸發] Gemini 已達限額或異常，本輪及后续工作流將直接走備援通道。"
-                    )
+
+                    # 💡 只對當前對話實例熔斷
+                    self.gemini_available = False
+                    print("🚨 [熔斷觸發] 當前 Agent 實例已將 Gemini 切換至備援通道。")
+
                     if OPENROUTER_API_KEY:
                         print("⏳ 觸發配額限制，安全等待 1.5 秒後切換備援...")
                         time.sleep(1.5)
@@ -105,10 +103,10 @@ class Agent:
                     else:
                         raise gemini_error
             else:
-                # 🌟 如果已經熔斷，接下來的 Loop 直接秒切 OpenRouter，零等待！
+                # 🌟 已熔斷狀態，直接走備援
                 if OPENROUTER_API_KEY:
                     print(
-                        "⚡ [快道運行] 偵測到 Gemini 處於熔斷狀態，直接使用 [備用模型: OpenRouter] 處理請求..."
+                        "⚡ [快道運行] 偵測到 Gemini 處於熔斷狀態，直接使用 [備用模型: OpenRouter]..."
                     )
                     try:
                         response = openrouter.invoke(messages_with_sys)
@@ -118,7 +116,6 @@ class Agent:
                 else:
                     raise RuntimeError("主要模型已熔斷，且未配置備援 OpenRouter 密鑰。")
 
-            # 🎯 這裡只做最純粹的日誌列印，不干涉、不清洗任何參數，讓 LangChain / LangGraph 走原生校驗
             if hasattr(response, "tool_calls") and response.tool_calls:
                 print("\n================ 🛠️ MCP TOOL CALL DETECTED ================")
                 for tool_call in response.tool_calls:
@@ -134,12 +131,7 @@ class Agent:
         graph = StateGraph(State)
         graph.add_node("agent", self._model())
         graph.add_node(
-            "tools",
-            self.tool_node,
-            retry={
-                "max_attempts": 1,
-                "retry_on": Exception,  # 遇到任何錯誤都觸發此原則（這裡設 1 次代表直接放棄重試）
-            },
+            "tools", self.tool_node, retry={"max_attempts": 1, "retry_on": Exception}
         )
         graph.add_edge(START, "agent")
         graph.add_conditional_edges("agent", tools_condition)

@@ -17,7 +17,7 @@ from ui.app import run_ui
 
 def run_bg_api(api_app):
     print("🚀 [FastAPI] 大腦對外 API 服務正在啟動，監聽 http://127.0.0.1:8000 ...")
-    uvicorn.run(api_app, host="127.0.0.1", port=8000, log_level="warning")
+    uvicorn.run(api_app, host="0.0.0.0", port=8000, log_level="warning")
 
 
 @st.cache_resource

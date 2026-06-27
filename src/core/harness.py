@@ -1,13 +1,15 @@
 # core/harness.py
+import os
 import asyncio
 import threading
 import traceback
 import queue
-from contextlib import AsyncExitStack
+from typing import List
 
-# 🌟 官方最新 SDK 标准导入路径
-from mcp import ClientSession
-from mcp.client.sse import sse_client
+# FastMCP 3.4.2+ 高階客戶端
+from fastmcp import Client
+from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.tools import load_mcp_tools
 
 from core.agent import Agent
 
@@ -15,96 +17,55 @@ from core.agent import Agent
 class AgentHarness:
     """
     Agent Harness (駕馭層 / 運行殼)
+    使用 FastMCP 簡化遠端 MCP 服務的連接與工具鏈整合
     """
 
-    def __init__(self, mcp_server_url: str = "http://localhost:8001/sse"):
-        self.mcp_server_url = mcp_server_url
+    def __init__(self, mcp_server_url: str = None):
+        # 優先使用傳入的參數，其次讀取環境變數，最後使用默認值
+        self.mcp_server_url = mcp_server_url or os.getenv(
+            "MCP_SERVER_URL", "http://127.0.0.1:8001/mcp"
+        )
+        print(f"🚀 [Harness] 預備連接至 MCP 伺服器: {self.mcp_server_url}")
+
         self.loop = asyncio.new_event_loop()
-        self.exit_stack = AsyncExitStack()
         self.agent_core = None  # 存放核心大腦
         self._thread = None
+        self.client = None
 
     def _run_loop(self):
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
     async def _async_init(self):
-        """在背景 Loop 中打通網路管道，裝載內核(代理模式)"""
-        lc_tools = []  # 儲存轉換成 LangChain 格式的工具
+        """在背景 Loop 中打通網路管道，自動轉換並裝載內核工具"""
+        lc_tools: List[BaseTool] = []
         try:
-            print(f"🔄 [Harness] 正在建立連接至 MCP 伺服器: {self.mcp_server_url}")
-            read, write = await self.exit_stack.enter_async_context(
-                sse_client(self.mcp_server_url)
-            )
+            print(f"🔄 [Harness] 正在建立 FastMCP 連接: {self.mcp_server_url}")
 
-            # 注意：這裡將 session 提升為類別屬性 self.mcp_session，方便後續遠端調用
-            self.mcp_session = await self.exit_stack.enter_async_context(
-                ClientSession(read, write)
-            )
-            await asyncio.wait_for(self.mcp_session.initialize(), timeout=5)
+            # 1. 初始化 FastMCP Client (支援 http/https/ws/wss 或 local command)
+            self.client = Client(self.mcp_server_url)
+
+            # 2. 透過 __aenter__ 或 context 管理建立連線
+            await self.client.__aenter__()
             print("✨ [Harness] MCP 網路管道打通成功！")
 
-            tools_response = await self.mcp_session.list_tools()
-            mcp_tools = tools_response.tools
+            # 3. 🌟 真正修正：利用 langchain-mcp-adapters 转换工具
+            # fastmcp 的 client.session 才是底层的 MCP Session 对象
+            if self.client.session:
+                lc_tools = await load_mcp_tools(self.client.session)
+            else:
+                raise RuntimeError("FastMCP Session 未成功建立")
 
-            # 🌟 核心修正：改用 StructuredTool 显式绑定遠端 MCP 工具的 JSON Schema 结构
-            from langchain_core.tools import StructuredTool
-
-            for remote_tool in mcp_tools:
-                # 這裡使用動態閉包，讓 LangChain 呼叫該工具時，Harness 自動發送 RPC 請求給遠端 MCP Server
-                def make_mcp_wrapper(tool_name):
-                    async def mcp_wrapper(**kwargs):
-                        # ====== 💡 核心修复代码开始 ======
-                        # 如果发现参数被错误地包在了一个叫 'kwargs' 的键里，直接把它提出来
-                        actual_args = (
-                            kwargs.get("kwargs", kwargs)
-                            if "kwargs" in kwargs and len(kwargs) == 1
-                            else kwargs
-                        )
-                        # ====== 💡 核心修复代码结束 ======
-
-                        # 調用常駐於 Harness 內部的會話發送請求
-                        res = await self.mcp_session.call_tool(
-                            tool_name, arguments=actual_args
-                        )
-                        # 回傳遠端資料庫或服務的純文字結果
-                        return "".join(
-                            [
-                                content.text
-                                for content in res.content
-                                if hasattr(content, "text")
-                            ]
-                        )
-
-                    return mcp_wrapper
-
-                # 🎯 从远端 MCP 传入的工具定义中取出参数结构 input_schema
-                # 有些 SDK 为字典，有些为对象，这里做一层鲁棒兼容
-                raw_schema = getattr(remote_tool, "input_schema", None)
-                if isinstance(
-                    raw_schema, os if "os" in locals() else object
-                ) or hasattr(raw_schema, "model_json_schema"):
-                    tool_schema = raw_schema
-                else:
-                    tool_schema = None
-
-                # 🎯 使用 StructuredTool 替代普通的 lc_tool
-                constructed_tool = StructuredTool.from_function(
-                    name=remote_tool.name,
-                    description=remote_tool.description or "MCP Remote Tool",
-                    coroutine=make_mcp_wrapper(remote_tool.name),
-                    # 将遠端工具所需要的真实参数结构注册进来，彻底终结模型识别出 'kwargs' 的情况
-                    args_schema=tool_schema,
-                )
-                lc_tools.append(constructed_tool)
-
-            print(f"✅ [Harness] 成功動態轉換並裝載 {len(lc_tools)} 個網路生態工具")
+            print("转换后的实际类型:", [type(t) for t in lc_tools])
+            print(
+                f"✅ [Harness] 成功自動轉換並裝載 {len(lc_tools)} 個 LangChain 生態工具"
+            )
 
         except Exception as e:
             print(f"🛑 [Harness Warning] MCP 管道建立失敗，降級為純本地運行。原因: {e}")
             traceback.print_exc()
 
-        # 🌟 傳入轉換完成的 lc_tools，而不是原始的 mcp_tools
+        # 4. 傳入轉換完成的工具給 Agent
         self.agent_core = Agent(mcp_tools=lc_tools)
 
     def bootstrap(self):
@@ -116,7 +77,7 @@ class AgentHarness:
         return future.result(timeout=60)
 
     def interact(self, user_message: str, thread_id: str) -> str:
-        """多端復用的標準同步交互接口（门面模式）"""
+        """多端複用的標準同步交互接口（門面模式）"""
         if not self.agent_core:
             raise RuntimeError("Harness 運行殼尚未就緒！")
 
@@ -130,74 +91,103 @@ class AgentHarness:
         return result["messages"][-1].content
 
     async def interact_stream(self, user_message: str, thread_id: str):
-        """专供 FastAPI 呼叫的真·异步流式接口"""
+        """專供 FastAPI 呼叫的真·異步流式接口"""
         if not self.agent_core:
             raise RuntimeError("Harness 運行殼尚未就緒！")
 
         inputs = {"messages": [("user", user_message)]}
         config = {"configurable": {"thread_id": thread_id}}
 
-        # 💡 核心魔法：使用 astream 并指定 stream_mode="messages"
-        # 它会在大模型一边生成 Token 的时候，一边把消息 chunk 丢出来
-        # 因为要在你的 self.loop (后台线程循环) 里跑，我们用 astream_events 或直接流式包装
-        
-        # 为了安全在跨线程的 loop 中读取流，我们用一个异步队列做桥接
-        queue = asyncio.Queue()
-        
-        # 定义一个在后台 loop 里跑的抓取任务
+        # 透過一個異步隊列做跨執行緒的 Bridge 傳輸
+        async_q = asyncio.Queue()
+
         async def producer():
             try:
+                # 這裡假設 agent_core.app 是一個 LangGraph 或 LCEL RunnableSequence
                 async for chunk, metadata in self.agent_core.app.astream(
                     inputs, config, stream_mode="messages"
                 ):
-                    # 只要大模型吐字了，就塞进队列
-                    if chunk and hasattr(chunk, 'content') and chunk.content:
-                        await queue.put(chunk.content)
-            except Exception as e:
-                await queue.put(e)
-            finally:
-                await queue.put(None) # 结束标志
 
-        # 投递到后台循环运行
+                    if chunk and hasattr(chunk, "content"):
+
+                        content = chunk.content
+
+                        # 純文字
+                        if isinstance(content, str):
+                            await async_q.put(content)
+
+                        # List
+                        elif isinstance(content, list):
+
+                            for item in content:
+
+                                # OpenAI Content Block
+                                if isinstance(item, dict):
+
+                                    if item.get("extras"):
+                                        continue
+
+                                    if item.get("type") == "text":
+                                        text = item.get("text")
+                                        if text:
+                                            await async_q.put(text)
+
+                                # LangChain TextContent
+                                elif hasattr(item, "text"):
+                                    if item.text:
+                                        await async_q.put(item.text)
+
+                                # 已經是 str
+                                elif isinstance(item, str):
+                                    await async_q.put(item)
+            except Exception as e:
+                await async_q.put(e)
+            finally:
+                await async_q.put(None)  # 結束標記
+
+        # 投遞到後台 loop 異步執行
         asyncio.run_coroutine_threadsafe(producer(), self.loop)
 
-        # 在 FastAPI 的当前线程中消费这个队列
+        # 在當前異步上下文（如 FastAPI 執行緒）中消費這個隊列
         while True:
-            item = await queue.get()
+            item = await async_q.get()
             if item is None:
                 break
             if isinstance(item, Exception):
                 raise item
             yield item
 
-
     def interact_stream_sync(self, user_message: str, thread_id: str):
-        """專門餵給 Streamlit 用的同步流式接口（跨線程橋接）"""
+        """專門餵給 Streamlit 用的同步流式接口（跨執行緒橋接）"""
         if not self.agent_core:
             raise RuntimeError("Harness 運行殼尚未就緒！")
 
         # 建立一個執行緒安全的同步隊列
         sync_q = queue.Queue()
 
-        # 定義一個要在後台 loop 執行的異步任務
         async def _async_producer():
             try:
-                # 呼叫你剛剛寫的真·異步流式方法
+                # 呼叫上面的異步生成器並轉存到同步隊列
                 async for token in self.interact_stream(user_message, thread_id):
-                    sync_q.put(token) # 塞進同步隊列
+                    sync_q.put(token)
             except Exception as e:
                 sync_q.put(e)
             finally:
-                sync_q.put(None) # 結束標記
+                sync_q.put(None)
 
         # 投遞到後台線程去執行
         asyncio.run_coroutine_threadsafe(_async_producer(), self.loop)
 
-        # 在 Streamlit 的主線程（同步環境）中消費這個隊列
+        # 在 Streamlit 的主執行緒（同步環境）中消費這個隊列
         while True:
             item = sync_q.get()
             if item is None:
                 break
             if isinstance(item, Exception):
                 raise item
-            yield item # 作為同步生成器吐出
+            yield item
+
+    async def close(self):
+        """釋放 FastMCP 客戶端資源"""
+        if self.client:
+            await self.client.__aexit__(None, None, None)

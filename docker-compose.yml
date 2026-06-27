@@ -1,18 +1,48 @@
-version: '3.8'
 
 services:
-  neo4j:
-    image: neo4j:5
-
+  # 2. 🌐 【業務層】Mock Web 應用（對應你的 mock_gateway.py）
+  web-app:
+    build: .
+    container_name: onto_web_app
     ports:
-      - "7474:7474"
-      - "7687:7687"
-
-    volumes:
-      - ./src/ontology:/var/lib/neo4j/import
-
+      - "5000:5000"
+    # 💡 完美對齊你的啟動路徑，並讓 uvicorn/flask 監聽 0.0.0.0 埠口 5000
+    command: ["python", "./src/webapp/mock_gateway.py"]
     environment:
-      - NEO4J_PLUGINS=["apoc","n10s"]
-      - NEO4J_dbms_security_procedures_unrestricted=n10s.*,apoc.*
-      - NEO4J_dbms_security_procedures_allowlist=n10s.*,apoc.*
-      - NEO4J_AUTH=neo4j/password123
+      - APP_ENV=production
+    restart: always
+
+  # 3. ⚡ 【工具層】通用 MCP Server（對應你的 server:app）
+  mcp-server:
+    build: .
+    container_name: onto_mcp_server
+    ports:
+      - "8001:8001"
+    # 💡 完美對齊你的 uvicorn 啟動命令，注意：在容器內 host 必須是 0.0.0.0
+    command: ["python", "src/mcp_server/server.py"]
+    environment:
+      - NEO4J_URI=bolt://host.docker.internal:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - INTERNAL_WEB_API_URL=http://web-app:5000
+    depends_on:
+      - web-app
+    restart: always
+
+# 4. 🧠💻 【大腦+前端層】一體化 Agent 服務（src/main.py）
+  # 💡 亮點：這一個容器啟動後，網頁有了，背景 8000 埠口的 API 服務也自動開好了！
+  onto-agent-all-in-one:
+    build: .
+    container_name: onto_agent_all_in_one
+    ports:
+      - "8501:8501"  # 瀏覽器訪問 Streamlit
+      - "8000:8000"  # 其他第三方系統或 Postman 訪問 FastAPI
+    # 這裡不寫 command，就會採用 Dockerfile 預設的 streamlit run 指令
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - MCP_SERVER_URL=http://onto_mcp_server:8001/mcp
+    depends_on:
+      - mcp-server
+    restart: always

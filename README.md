@@ -75,6 +75,12 @@ Prerequisites
 
 Installation & Setup
 
+CALL n10s.graphconfig.init();
+
+CREATE CONSTRAINT n10s_unique_uri FOR (r:Resource) REQUIRE r.uri IS UNIQUE;
+
+CALL n10s.rdf.import.fetch("file:///var/lib/neo4j/import/kiwi_ontology.ttl", "Turtle");
+
 - 1.Clone the repository
 
   git clone [https://github.com/your-username/OntoAgent.git](https://github.com/your-username/OntoAgent.git)
