@@ -5,6 +5,7 @@ from typing import Optional
 import asyncio
 from fastapi.responses import StreamingResponse
 import uuid
+from fastapi.middleware.cors import CORSMiddleware  # 💡 導入 CORS 中間件
 
 router = APIRouter(prefix="/api/v1")
 
@@ -13,6 +14,10 @@ router = APIRouter(prefix="/api/v1")
 class ChatPayload(BaseModel):
     message: str
     session_id: Optional[str] = None  # 允許外部傳入自訂的會話 ID，用於辨識不同用戶
+
+
+# 4. 工廠函數：創立 FastAPI 實例並注入全局 harness
+global_harness = None
 
 
 # 🌟 新增：2. 健康檢查接口 (Health Check)
@@ -59,8 +64,21 @@ async def agent_api_endpoint(payload: ChatPayload):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-# 4. 工廠函數：創立 FastAPI 實例並注入全局 harness
-global_harness = None
+@router.post("/workflow/run")
+async def deploy_canvas(graph_dto: dict):
+    """
+    接收前端畫布發送過來的完整 JSON 數據
+    """
+    # 這裡的 graph_dto 就是前端畫布的 JSON
+    print("【前端畫布傳來的原始數據】:", graph_dto)
+    # 傳入 JSON 進行動態編譯
+    global_harness.agent_core.deploy_or_update_flow(
+        ui_graph_json=graph_dto,
+        tools_list=global_harness.agent_core.tool_node,
+        model=global_harness.agent_core._model(),
+    )
+
+    return {"status": "success", "message": "畫布編譯並部署成功！"}
 
 
 def create_api(harness) -> FastAPI:
@@ -72,6 +90,20 @@ def create_api(harness) -> FastAPI:
     global_harness = harness  # 鎖定全局變量供路由使用
 
     app = FastAPI(title="Agent Harness API Gateway")
+    # 💡 定義允許訪問的前端來源列表
+    origins = [
+        "http://localhost:5173",  # 你的 Vite 前端地址
+        "http://127.0.0.1:5173",
+        # 如果未來有其他前端地址，也可以加在這裡
+    ]
+    # 💡 將 CORS 中間件加入到 FastAPI 實例中
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,  # 允許的來源列表
+        allow_credentials=True,  # 允許攜帶 Cookie / 認證資訊
+        allow_methods=["*"],  # 允許所有的請求方法 (POST, GET, OPTIONS 等)
+        allow_headers=["*"],  # 允許所有的請求標頭 (Content-Type, Authorization 等)
+    )
     app.include_router(router)
 
     return app

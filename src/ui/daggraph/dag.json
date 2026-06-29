@@ -1,0 +1,42 @@
+{
+  "nodes": [
+    {
+      "id": "start_node",
+      "type": "start",
+      "data": {
+        "label": "🚀 起點 (Start)"
+      }
+    },
+    {
+      "id": "node_8kc8m70it",
+      "type": "llm",
+      "data": {
+        "model": "deepseek-chat",
+        "prompt": "請詳細分析一下關於 {{topic}} 的商業潛力。"
+      }
+    },
+    {
+      "id": "node_r7gqa6ye4",
+      "type": "tool_search",
+      "data": {
+        "label": "🔍 谷歌搜尋工具",
+        "engine": "google"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "xy-edge__start_node-node_8kc8m70it",
+      "source": "start_node",
+      "target": "node_8kc8m70it"
+    },
+    {
+      "id": "xy-edge__node_8kc8m70it-node_r7gqa6ye4",
+      "source": "node_8kc8m70it",
+      "target": "node_r7gqa6ye4"
+    }
+  ],
+  "inputs": {
+    "topic": "區塊鏈技術"
+  }
+}

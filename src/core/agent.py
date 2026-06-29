@@ -11,6 +11,8 @@ from langchain_openai import ChatOpenAI
 
 from src.config.config import GEMINI_API_KEY, OPENROUTER_API_KEY
 from src.core.tools import get_weather, search_official_knowledge_base
+from src.core.workflow import DynamicGraphCompiler
+
 
 
 class State(TypedDict):
@@ -25,7 +27,8 @@ class Agent:
         # 💡 將熔斷標記綁定在實例上，避免多用戶併發時互相干擾
         self.gemini_available = True
 
-        self.app = self._build_graph()
+        self.app = None
+        self.compiler = DynamicGraphCompiler(state_schema=State)
 
     def _model(self):
         # 🎯 提示：如果想嘗試消除 additionalProperties 警告，可以嘗試 strict=False（取決於 langchain 版本）
@@ -138,5 +141,17 @@ class Agent:
         graph.add_edge("tools", "agent")
         return graph.compile(checkpointer=MemorySaver())
 
+    def deploy_or_update_flow(self, ui_graph_json, tools_list, model):
+        """
+        當 UI 傳來新的 JSON 時，呼叫這個方法來更新工作流
+        """
+        print("收到 UI 新的畫布結構，開始重新編譯...")
+        # 動態編譯並直接覆蓋舊的 app
+        self.app = self.compiler.compile_from_json(ui_graph_json, tools_list=tools_list, model=model)
+
     async def ainvoke(self, inputs, config):
+        if not self.app:
+            raise ValueError("請先從 UI 畫布編譯並部署工作流！")
+        
+        # 執行當前由畫布生成的最新工作流
         return await self.app.ainvoke(inputs, config)
