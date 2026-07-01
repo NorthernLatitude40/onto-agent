@@ -13,6 +13,7 @@ from fastmcp import FastMCP
 # 引入抽離出來的獨立工具類別與參數契約
 from src.mcp_server.tools.graph_ingestion_tools import GraphIngestionTools
 from src.ingestion.interface.ontology.output_contract import MappingRule
+import requests
 
 # ==========================================
 # 1. 日誌配置
@@ -240,6 +241,57 @@ def get_tour_deals_by_city(city_name: str) -> List[str]:
     except Exception as e:
         logging.error(f"Neo4j 執行推理失敗: {e}", exc_info=True)
         return [f"ERROR: {str(e)}"]
+    
+# ==========================================
+# 6. 擴展的瀏覽器搜尋工具
+# ==========================================
+@mcp.tool()
+def web_search(query: str, max_results: int = 5) -> str:
+    """
+    當使用者詢問最新消息、即時資訊、時事，或是需要從網路上搜尋、查證資料時，使用此工具。
+    
+    Args:
+        query: 要搜尋的關鍵字或句子。
+        max_results: 回傳的結果數量，預設為 5 筆。
+    """
+    # 這裡以 Tavily API 為例（專為 LLM 設計的搜尋引擎）
+    # 你需要去 https://tavily.com/ 註冊一個免費的 API Key
+    api_key = os.environ.get("TAVILY_API_KEY")
+    
+    if not api_key:
+        return "錯誤：找不到 TAVILY_API_KEY 環境變數。請先設定 API 金鑰。"
+        
+    url = "https://api.tavily.com/search"
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "search_depth": "basic",
+        "max_results": max_results
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # 解析並格式化搜尋結果
+        results = data.get("results", [])
+        if not results:
+            return f"針對 '{query}' 沒有找到相關的搜尋結果。"
+            
+        formatted_outputs = []
+        for i, res in enumerate(results, 1):
+            formatted_outputs.append(
+                f"[{i}] 標題: {res.get('title')}\n"
+                f"    網址: {res.get('url')}\n"
+                f"    摘要: {res.get('content')}\n"
+                f"---"
+            )
+            
+        return "\n".join(formatted_outputs)
+        
+    except Exception as e:
+        return f"搜尋過程中發生錯誤: {str(e)}"
 
 
 # ==========================================
