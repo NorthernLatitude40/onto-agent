@@ -12,7 +12,7 @@ kiwi:Christchurch a kiwi:City ; rdfs:label "Christchurch" .
 kiwi:Anywhere a kiwi:City ; rdfs:label "Anywhere" .
 
 # ==========================================
-# 網頁 12 筆特惠行程數據
+# 網頁特惠行程數據
 # ==========================================
 
 # 1. BUZZY BEE
@@ -122,3 +122,12 @@ kiwi:Deal_TheWholeKitAndCaboodle a kiwi:HopOnHopOffDeal ;
     kiwi:durationDays 23 ;
     kiwi:discountPercent 30 ;
     kiwi:priceNZD 1400.00 .
+
+# 13. THE JANDAL (WINTER EDITION)
+kiwi:Deal_TheJandalWinter a kiwi:ClassicTourDeal ;
+    kiwi:productId "KE-JANDAL-WINTER" ;
+    rdfs:label "The Jandal (Winter Edition)" ;
+    kiwi:startsFrom kiwi:Auckland ;
+    kiwi:endsAt kiwi:Auckland ;
+    kiwi:durationDays 8 ;
+    kiwi:priceNZD 1099.00 .

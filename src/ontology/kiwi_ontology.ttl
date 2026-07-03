@@ -11,8 +11,19 @@ kiwi:HopOnHopOffDeal a owl:Class ;
     rdfs:subClassOf kiwi:TourDeal ;
     rdfs:label "Hop On Hop Off Deal" .
 
+kiwi:ClassicTourDeal a owl:Class ;
+    rdfs:subClassOf kiwi:TourDeal ;
+    rdfs:label "Classic Tour Deal" .
+
 kiwi:City a owl:Class ;
     rdfs:label "City" .
+
+# ==========================================
+# 新增：產品識別碼屬性（用於下單系統對接）
+# ==========================================
+kiwi:productId a owl:DatatypeProperty ;
+    rdfs:domain kiwi:TourDeal ;
+    rdfs:range xsd:string .  # 如果系統 ID 是純數字，也可以用 xsd:integer
 
 kiwi:startsFrom a owl:ObjectProperty ;
     rdfs:domain kiwi:TourDeal ;

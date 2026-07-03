@@ -28,7 +28,6 @@ logging.basicConfig(
 # ==========================================
 # 2. 實例化 FastMCP 伺服器
 # ==========================================
-# FastMCP 3.4.2+ 自帶整合，不需手動寫額外的 FastAPI app
 mcp = FastMCP("Ontology MCP")
 
 # 資料庫連線設定
@@ -84,7 +83,6 @@ def execute_excel_to_graph(file_path: str, mapping_rules: List[MappingRule]) -> 
             }
         ]
     """
-    # FastMCP 會依據 Pydantic / Type Hints 自動將傳入的 JSON 轉為對應的 MappingRule 結構
     return ingestion_toolbox.execute_graph_ingestion(file_path, mapping_rules)
 
 
@@ -96,8 +94,9 @@ def execute_excel_to_graph(file_path: str, mapping_rules: List[MappingRule]) -> 
 @mcp.tool()
 def query_mysql(sql_query: str) -> str:
     """
-    僅用於常規快捷工具無法覆蓋的、極度複雜的後台數據庫管理、財務報表統計或系統維護。
-    絕對不能用於查詢客戶與商品的購買歷史或名下資產。
+    僅供系統管理員使用。
+    只能查詢統計資料、財務資料、後台維護。
+    不得用來查詢旅遊商品、使用者或建立訂單。
     """
     clean_query = sql_query.strip().lower()
     if not clean_query.startswith("select") and not clean_query.startswith("show"):
@@ -116,33 +115,86 @@ def query_mysql(sql_query: str) -> str:
 
 
 @mcp.tool()
-def create_agent_order(
-    user_id: int, product_id: int, quantity: int, price_per_unit: float
-) -> str:
+def find_user_by_username(username: str) -> str:
     """
+    根據使用者名稱查詢會員資訊。
+    使用情境：使用者提供姓名，建立訂單前取得 user_id。
+    回傳：user_id, username, email, registration_date
+    """
+    try:
+        connection = pymysql.connect(**DB_CONFIG)
+        with connection.cursor() as cursor:
+            sql = "SELECT * FROM users WHERE username = %s"
+            cursor.execute(sql, (username,))
+            result = cursor.fetchall()
+            return str(result)
+    except Exception as e:
+        return f"錯誤: {e}"
+    finally:
+        if "connection" in locals() and connection.open:
+            connection.close()
+
+
+@mcp.tool()
+def find_product_by_name(product_name: str) -> str:
+    """
+    根據商品名稱模糊查詢商品資訊。
+    例如：The Jandal, The Jandal (Winter Edition)
+    回傳：product_id, price, stock
+    """
+    try:
+        connection = pymysql.connect(**DB_CONFIG)
+        with connection.cursor() as cursor:
+            # 修正原本殘缺的 SQL，改用安全的參數化查詢
+            sql = "SELECT product_id, price, stock FROM products WHERE product_name LIKE %s"
+            cursor.execute(sql, (f"%{product_name}%",))
+            result = cursor.fetchall()
+            return str(result)
+    except Exception as e:
+        return f"錯誤: {e}"
+    finally:
+        if "connection" in locals() and connection.open:
+            connection.close()
+
+
+@mcp.tool()
+def create_agent_order(user_id: int, product_id: int, quantity: int) -> str:
+    """
+    若建立訂單缺少任何資訊，必須優先使用工具查詢，查不到時才詢問。
     當使用者想要購買某個商品時呼叫。
-    此工具會自動計算總價，並同時寫入 MySQL 的 orders 主表與 order_items 明細表（主從表聯動），並返回付款連結。
+    此工具會自動聯動寫入 MySQL 的 orders 主表與 order_items 明細表，並返回付款連結。
     """
     logging.info("======== 收到 Agent 聯動創建訂單請求 ========")
-    total_amount = round(quantity * price_per_unit, 2)
-    current_date = time.strftime("%Y-%m-%d")
 
     try:
         connection = pymysql.connect(**DB_CONFIG)
         with connection.cursor() as cursor:
-            # 1. 寫入 orders 主表
+            # 1. 補全原本缺漏的：先查詢商品單價 (price) 以計算總價
+            sql_price = "SELECT price FROM products WHERE product_id = %s"
+            cursor.execute(sql_price, (product_id,))
+            product = cursor.fetchone()
+
+            if not product:
+                return f"錯誤：找不到商品 ID {product_id} 的價格資訊。"
+
+            price_per_unit = float(product["price"])
+            total_amount = round(quantity * price_per_unit, 2)
+            current_date = time.strftime("%Y-%m-%d")
+
+            # 2. 寫入 orders 主表
             sql_order = "INSERT INTO `orders` (`user_id`, `order_date`, `total_amount`, `status`) VALUES (%s, %s, %s, 'PENDING')"
             cursor.execute(sql_order, (user_id, current_date, total_amount))
 
-            # 2. 獲取自增產生的 order_id
+            # 3. 獲取自增產生的 order_id
             new_order_id = cursor.lastrowid
 
-            # 3. 寫入 order_items 明細表
+            # 4. 寫入 order_items 明細表
             sql_item = "INSERT INTO `order_items` (`order_id`, `product_id`, `quantity`, `price_per_unit`) VALUES (%s, %s, %s, %s)"
             cursor.execute(
                 sql_item, (new_order_id, product_id, quantity, price_per_unit)
             )
 
+            # 5. 確認提交交易
             connection.commit()
 
         logging.info(f"成功聯動寫入 MySQL！主表訂單 ID: {new_order_id}。")
@@ -159,8 +211,37 @@ def create_agent_order(
         )
 
     except Exception as e:
+        if "connection" in locals():
+            connection.rollback()  # 發生異常時倒滾，確保主從表數據一致性
         logging.error(f"寫入資料庫失敗: {e}", exc_info=True)
         return f"建立訂單失敗，資料庫寫入異常: {str(e)}"
+    finally:
+        if "connection" in locals() and connection.open:
+            connection.close()
+
+
+@mcp.tool()
+def get_order_by_id(order_id: int) -> str:
+    """
+    根據訂單 ID 查詢訂單詳情與明細（包含主表與明細表聯查）。
+    """
+    try:
+        connection = pymysql.connect(**DB_CONFIG)
+        with connection.cursor() as cursor:
+            sql = """
+            SELECT o.order_id, o.user_id, o.order_date, o.total_amount, o.status,
+                   oi.product_id, oi.quantity, oi.price_per_unit
+            FROM orders o
+            LEFT JOIN order_items oi ON o.order_id = oi.order_id
+            WHERE o.order_id = %s
+            """
+            cursor.execute(sql, (order_id,))
+            result = cursor.fetchall()
+            if not result:
+                return f"找不到訂單 ID: {order_id} 的資料。"
+            return str(result)
+    except Exception as e:
+        return f"錯誤: {e}"
     finally:
         if "connection" in locals() and connection.open:
             connection.close()
@@ -175,15 +256,12 @@ def create_agent_order(
 def get_tour_deals_by_city(city_name: str) -> List[str]:
     """
     利用 n10s 本體推理，查詢指定城市出發或全局的紐西蘭旅遊特惠行程（Deals）。
-    只要用戶提問涉及“從哪裡出發有什麼行程”、“某城市的旅遊套裝”、“特惠行程查詢”，必須且只能調用此工具。
     """
     logging.info(f"[Graph Query] 進入優化推理 - 目標城市/概念: '{city_name}'")
     search_name = city_name.strip()
 
-    # 轉換為小寫判斷是否為全局本體概念查詢
     is_global_query = search_name.lower() in ["city", "tourdeal", "hoponhopoffdeal"]
 
-    # 抽取核心的 Cypher 模板以提高可讀性
     cypher_base = """
     MATCH (dealClass:owl__Class) WHERE dealClass.uri ENDS WITH "TourDeal"
     MATCH (cityClass:owl__Class) WHERE cityClass.uri ENDS WITH "City"
@@ -241,44 +319,39 @@ def get_tour_deals_by_city(city_name: str) -> List[str]:
     except Exception as e:
         logging.error(f"Neo4j 執行推理失敗: {e}", exc_info=True)
         return [f"ERROR: {str(e)}"]
-    
+
+
 # ==========================================
 # 6. 擴展的瀏覽器搜尋工具
 # ==========================================
 @mcp.tool()
-def web_search(query: str, max_results: int = 5) -> str:
+def web_search(query: str, max_results: int = 3) -> str:
     """
     當使用者詢問最新消息、即時資訊、時事，或是需要從網路上搜尋、查證資料時，使用此工具。
-    
-    Args:
-        query: 要搜尋的關鍵字或句子。
-        max_results: 回傳的結果數量，預設為 5 筆。
+    請一律使用條列式（Bullet points）或普通字體呈現。嚴禁使用 #, ##, ### 等標題語法。
     """
-    # 這裡以 Tavily API 為例（專為 LLM 設計的搜尋引擎）
-    # 你需要去 https://tavily.com/ 註冊一個免費的 API Key
     api_key = os.environ.get("TAVILY_API_KEY")
-    
+
     if not api_key:
         return "錯誤：找不到 TAVILY_API_KEY 環境變數。請先設定 API 金鑰。"
-        
+
     url = "https://api.tavily.com/search"
     payload = {
         "api_key": api_key,
         "query": query,
         "search_depth": "basic",
-        "max_results": max_results
+        "max_results": max_results,
     }
-    
+
     try:
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
-        
-        # 解析並格式化搜尋結果
+
         results = data.get("results", [])
         if not results:
             return f"針對 '{query}' 沒有找到相關的搜尋結果。"
-            
+
         formatted_outputs = []
         for i, res in enumerate(results, 1):
             formatted_outputs.append(
@@ -287,25 +360,22 @@ def web_search(query: str, max_results: int = 5) -> str:
                 f"    摘要: {res.get('content')}\n"
                 f"---"
             )
-            
+
         return "\n".join(formatted_outputs)
-        
+
     except Exception as e:
         return f"搜尋過程中發生錯誤: {str(e)}"
 
 
 # ==========================================
-# 6. 啟動 FastMCP 伺服器
+# 7. 啟動 FastMCP 伺服器
 # ==========================================
 if __name__ == "__main__":
     try:
-        # FastMCP 內建完美的標準 HTTP/SSE 與 Stdio 傳輸切換機制
-        # 移除了原先會報錯的 @app.get 偽代碼，完全託管給 FastMCP
         mcp.run(
             transport="http",
             host="0.0.0.0",
             port=8001,
         )
     finally:
-        # 確保進程關閉時 Driver 資源能優雅釋放
         driver.close()

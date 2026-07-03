@@ -1,5 +1,5 @@
-# # core/agent.py
 import time
+import os
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, START
 from langgraph.graph.message import add_messages
@@ -8,8 +8,12 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
+from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint  # 🚀 導入 Hugging Face 整合套件
 
 from src.config.config import GEMINI_API_KEY, OPENROUTER_API_KEY
+# 🎯 提示：請在 config 檔案中配置 HUGGINGFACEHUB_API_TOKEN
+from src.config.config import HUGGINGFACEHUB_API_TOKEN 
+
 from src.core.tools import get_weather, search_official_knowledge_base
 from src.core.workflow import DynamicGraphCompiler
 
@@ -25,16 +29,18 @@ class Agent:
 
         # 💡 將熔斷標記綁定在實例上，避免多用戶併發時互相干擾
         self.gemini_available = True
+        self.openrouter_available = True  # 🚀 新增 OpenRouter 狀態追蹤，用以決定是否降級至 HF
 
         self.app = self._build_graph()  # 光速建立一個最簡單的圖：START -> llm -> END
         self.compiler = DynamicGraphCompiler(state_schema=State)
 
     def _model(self):
-        # 🎯 提示：如果想嘗試消除 additionalProperties 警告，可以嘗試 strict=False（取決於 langchain 版本）
+        # 1️⃣ 主要模型：Gemini
         gemini = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash", api_key=GEMINI_API_KEY, temperature=0
         ).bind_tools(self.tools, strict=False)
 
+        # 2️⃣ 第一備援：OpenRouter (Gemma)
         openrouter = ChatOpenAI(
             model="google/gemma-4-31b-it:free",
             openai_api_key=OPENROUTER_API_KEY,
@@ -42,8 +48,17 @@ class Agent:
             temperature=0,
         ).bind_tools(self.tools)
 
+        # 3️⃣ 第二備援：Hugging Face (以 Qwen2.5-7B-Instruct 為例)
+        # 注意：使用工具綁定（Tool Calling）需要 HF 模型本身有支援（如 Qwen, Llama3）
+        llm_hf = HuggingFaceEndpoint(
+            repo_id="Qwen/Qwen2.5-7B-Instruct",
+            huggingfacehub_api_token=HUGGINGFACEHUB_API_TOKEN,
+            temperature=0.1,
+            task="text-generation",
+        )
+        huggingface = ChatHuggingFace(llm=llm_hf).bind_tools(self.tools)
+
         def call(state: State):
-            # 💡 透過閉包直接讀寫實例屬性，不再需要 global
             current_messages = state["messages"]
 
             sys = (
@@ -78,54 +93,54 @@ class Agent:
             messages_with_sys = [("system", sys)] + current_messages
             response = None
 
-            # 🌟 根據實例的熔斷標記動態選擇
+            # --- 🤖 階層式模型路由與熔斷狀態機 ---
+            
+            # 第一階段：嘗試主要模型 (Gemini)
             if self.gemini_available:
                 try:
-                    print("🔄 正在嘗試使用 [主要模型: Gemini] 處理請求...")
+                    print("🔄 [Level 1] 正在嘗試使用 [主要模型: Gemini] 處理請求...")
                     response = gemini.invoke(messages_with_sys)
                     print("🎉 [Gemini] 請求成功！")
+                    return {"messages": [response]}
                 except Exception as gemini_error:
                     print(f"⚠️ [Gemini] 發生異常: {gemini_error}")
-
-                    # 💡 只對當前對話實例熔斷
                     self.gemini_available = False
                     print("🚨 [熔斷觸發] 當前 Agent 實例已將 Gemini 切換至備援通道。")
+                    time.sleep(1.5)  # 配額緩衝
 
-                    if OPENROUTER_API_KEY:
-                        print("⏳ 觸發配額限制，安全等待 1.5 秒後切換備援...")
-                        time.sleep(1.5)
-                        print("🚀 啟動備援機制，切換至 [備用模型: OpenRouter]...")
-                        try:
-                            response = openrouter.invoke(messages_with_sys)
-                            print("🎉 [OpenRouter] 備援成功！")
-                        except Exception as router_error:
-                            raise RuntimeError(
-                                f"所有模型均失效。最後錯誤: {router_error}"
-                            )
-                    else:
-                        raise gemini_error
+            # 第二階段：嘗試第一備援 (OpenRouter)
+            if self.openrouter_available and OPENROUTER_API_KEY:
+                try:
+                    print("🚀 [Level 2] 正在嘗試使用 [備用模型 1: OpenRouter]...")
+                    response = openrouter.invoke(messages_with_sys)
+                    print("🎉 [OpenRouter] 備援成功！")
+                    return {"messages": [response]}
+                except Exception as router_error:
+                    print(f"⚠️ [OpenRouter] 發生異常: {router_error}")
+                    self.openrouter_available = False
+                    print("🚨 [二次熔斷] OpenRouter 失效，準備調度終極備援。")
+                    time.sleep(1.0)
+
+            # 第三階段：嘗試第二備援 (Hugging Face)
+            if HUGGINGFACEHUB_API_TOKEN:
+                try:
+                    print("⚡ [Level 3] 進入終極備援，正在嘗試使用 [備用模型 2: Hugging Face]...")
+                    response = huggingface.invoke(messages_with_sys)
+                    print("🎉 [Hugging Face] 終極備援成功！")
+                    
+                    # 印出 MCP 軌跡調試資訊
+                    if hasattr(response, "tool_calls") and response.tool_calls:
+                        print("\n================ 🛠️ MCP TOOL CALL DETECTED ================")
+                        for tool_call in response.tool_calls:
+                            print(f"📌 [工具名稱]: {tool_call.get('name')}")
+                            print(f"🔑 [原始參數]: {tool_call.get('args')}")
+                        print("===========================================================\n")
+                        
+                    return {"messages": [response]}
+                except Exception as hf_error:
+                    raise RuntimeError(f"💥 核心崩潰：所有 LLM 模型層級均已失效。最後錯誤: {hf_error}")
             else:
-                # 🌟 已熔斷狀態，直接走備援
-                if OPENROUTER_API_KEY:
-                    print(
-                        "⚡ [快道運行] 偵測到 Gemini 處於熔斷狀態，直接使用 [備用模型: OpenRouter]..."
-                    )
-                    try:
-                        response = openrouter.invoke(messages_with_sys)
-                        print("🎉 [OpenRouter] 備援成功！")
-                    except Exception as router_error:
-                        raise RuntimeError(f"備援模型也失效。最後錯誤: {router_error}")
-                else:
-                    raise RuntimeError("主要模型已熔斷，且未配置備援 OpenRouter 密鑰。")
-
-            if hasattr(response, "tool_calls") and response.tool_calls:
-                print("\n================ 🛠️ MCP TOOL CALL DETECTED ================")
-                for tool_call in response.tool_calls:
-                    print(f"📌 [工具名稱]: {tool_call.get('name')}")
-                    print(f"🔑 [原始參數]: {tool_call.get('args')}")
-                print("===========================================================\n")
-
-            return {"messages": [response]}
+                raise RuntimeError("主要與次要模型均失效，且未配置 HUGGINGFACEHUB_API_TOKEN 終極備援。")
 
         return call
 
@@ -141,11 +156,7 @@ class Agent:
         return graph.compile(checkpointer=MemorySaver())
 
     def deploy_or_update_flow(self, ui_graph_json, tools_list, model):
-        """
-        當 UI 傳來新的 JSON 時，呼叫這個方法來更新工作流
-        """
         print("收到 UI 新的畫布結構，開始重新編譯...")
-        # 動態編譯並直接覆蓋舊的 app
         self.app = self.compiler.compile_from_json(
             ui_graph_json, tools_list=tools_list, model=model
         )
@@ -153,6 +164,4 @@ class Agent:
     async def ainvoke(self, inputs, config):
         if not self.app:
             raise ValueError("請先從 UI 畫布編譯並部署工作流！")
-
-        # 執行當前由畫布生成的最新工作流
         return await self.app.ainvoke(inputs, config)

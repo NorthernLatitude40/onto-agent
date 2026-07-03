@@ -98,55 +98,62 @@ class AgentHarness:
         return result["messages"][-1].content
 
     async def interact_stream(self, user_message: str, thread_id: str):
-        """專供 FastAPI 呼叫的真·異步流式接口"""
+        """專供 FastAPI 呼叫的真·異步流式接口（終極穩定版：改用 updates 模式精準分離狀態與對話）"""
         if not self.agent_core:
             raise RuntimeError("Harness 運行殼尚未就緒！")
 
         inputs = {"messages": [("user", user_message)]}
         config = {"configurable": {"thread_id": thread_id}}
 
-        # 透過一個異步隊列做跨執行緒的 Bridge 傳輸
         async_q = asyncio.Queue()
 
         async def producer():
             try:
-                # 這裡假設 agent_core.app 是一個 LangGraph 或 LCEL RunnableSequence
-                async for chunk, metadata in self.agent_core.app.astream(
-                    inputs, config, stream_mode="messages"
+                # 🚀 關鍵改動：改用 stream_mode="updates"，按節點（Node）產出結果
+                async for chunk in self.agent_core.app.astream(
+                    inputs, config, stream_mode="updates"
                 ):
+                    # 1. 🔍 偵測到進入了工具執行節點 (通常叫 tools 或 call_mcp_tool)
+                    if "tools" in chunk:
+                        tool_messages = chunk["tools"].get("messages", [])
+                        for msg in tool_messages:
+                            # 這是 MCP 真正回傳結果的時候，我們在這裡發送漂亮的進度條，並封鎖背後的原始 JSON 文字
+                            tool_name = getattr(msg, "name", "")
+                            status_mapping = {
+                                "find_user_by_username": "\n\n🤖 **Kiapi Assistant** 正在確認會員資訊... ✓\n",
+                                "find_product_by_name": "🔍 正在確認商品庫存與價格... ✓\n",
+                                "create_agent_order": "📦 正在為您建立系統訂單... ✓\n",
+                            }
+                            if tool_name in status_mapping:
+                                await async_q.put(status_mapping[tool_name])
+                        continue  # 🛑 絕對不讓 tools 的原始 JSON 內容漏到前端
 
-                    if chunk and hasattr(chunk, "content"):
+                    # 2.  偵測到進入了大腦思考節點 (通常叫 agent)
+                    if "agent" in chunk:
+                        agent_messages = chunk["agent"].get("messages", [])
+                        if agent_messages:
+                            last_msg = agent_messages[-1]
 
-                        content = chunk.content
+                            # 如果這個 AIMessage 帶有 tool_calls，代表大模型正要「準備」去點擊工具
+                            # 為了確保流程不中斷，我們不能在這裡阻斷它，讓它在背景靜默流轉即可
+                            if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+                                continue
 
-                        # 純文字
-                        if isinstance(content, str):
-                            await async_q.put(content)
+                            # 只有當大模型「真正要對人類說話（最後的結論）」時，才把 content 放行
+                            if hasattr(last_msg, "content") and last_msg.content:
+                                content = last_msg.content
+                                if isinstance(content, str):
+                                    await async_q.put(content)
+                                elif isinstance(content, list):
+                                    for item in content:
+                                        if (
+                                            isinstance(item, dict)
+                                            and item.get("type") == "text"
+                                        ):
+                                            await async_q.put(item.get("text", ""))
+                                        elif hasattr(item, "text"):
+                                            await async_q.put(item.text)
 
-                        # List
-                        elif isinstance(content, list):
-
-                            for item in content:
-
-                                # OpenAI Content Block
-                                if isinstance(item, dict):
-
-                                    if item.get("extras"):
-                                        continue
-
-                                    if item.get("type") == "text":
-                                        text = item.get("text")
-                                        if text:
-                                            await async_q.put(text)
-
-                                # LangChain TextContent
-                                elif hasattr(item, "text"):
-                                    if item.text:
-                                        await async_q.put(item.text)
-
-                                # 已經是 str
-                                elif isinstance(item, str):
-                                    await async_q.put(item)
             except Exception as e:
                 await async_q.put(e)
             finally:
@@ -155,7 +162,7 @@ class AgentHarness:
         # 投遞到後台 loop 異步執行
         asyncio.run_coroutine_threadsafe(producer(), self.loop)
 
-        # 在當前異步上下文（如 FastAPI 執行緒）中消費這個隊列
+        # 在當前異步上下文中消費這個隊列
         while True:
             item = await async_q.get()
             if item is None:
