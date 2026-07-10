@@ -1,24 +1,122 @@
+version: "3.8"
+
+# 核心重點：直接引入同目錄下的 ClickHouse 設定檔
+include:
+  - clickhouse-compose.yml
 
 services:
-  # 2. 🌐 【業務層】Mock Web 應用（對應你的 mock_gateway.py）
+  # ==========================================
+  # 📊 【監控層】Langfuse 基礎設施 (Postgres + ClickHouse 雙引擎)
+  # ==========================================
+  langfuse-pg:
+    image: postgres:16-alpine
+    container_name: langfuse-pg
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${PG_PASSWORD}
+      - POSTGRES_DB=langfuse
+    volumes:
+      - langfuse_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    container_name: langfuse-worker
+    restart: always
+    depends_on:
+      langfuse-pg:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:${PG_PASSWORD}@langfuse-pg:5432/langfuse
+      # 【修正提示】這裡的主機名稱必須與 clickhouse 的服務名稱一致（即 langfuse-clickhouse）
+      # 且資料庫名稱、帳密需與 clickhouse-compose.yml 對齊
+      - CLICKHOUSE_URL=http://langfuse-clickhouse:8123
+      - CLICKHOUSE_DB=my_database
+      - CLICKHOUSE_MIGRATION_URL=${CLICKHOUSE_MIGRATION_URL}
+      - CLICKHOUSE_USER=my_user
+      - CLICKHOUSE_PASSWORD=my_password
+      - SALT=${SALT}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - NEXTAUTH_URL=http://localhost:3000
+      - TELEMETRY_ENABLED=false
+      - CLICKHOUSE_CLUSTER_ENABLED=false
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=langfuse
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1 # MinIO 默认填这个即可
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://langfuse-minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=minioadminsecret
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - REDIS_HOST=langfuse-redis
+      - REDIS_PORT=6379
+      - REDIS_AUTH=password123
+
+  langfuse-server:
+    image: docker.io/langfuse/langfuse:3
+    container_name: langfuse-server
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      langfuse-pg:   
+        condition: service_healthy
+      langfuse-clickhouse:      # 這裡可以直接成功依賴了！
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:${PG_PASSWORD}@langfuse-pg:5432/langfuse
+      # 【修正提示】這裡的主機名稱必須與 clickhouse 的服務名稱一致（即 langfuse-clickhouse）
+      # 且資料庫名稱、帳密需與 clickhouse-compose.yml 對齊
+      - CLICKHOUSE_URL=http://langfuse-clickhouse:8123
+      - CLICKHOUSE_DB=my_database
+      - CLICKHOUSE_MIGRATION_URL=${CLICKHOUSE_MIGRATION_URL}
+      - CLICKHOUSE_USER=my_user
+      - CLICKHOUSE_PASSWORD=my_password
+      - SALT=${SALT}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - NEXTAUTH_URL=http://localhost:3000
+      - TELEMETRY_ENABLED=false
+      - CLICKHOUSE_CLUSTER_ENABLED=false
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=langfuse
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1 # MinIO 默认填这个即可
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://langfuse-minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=minioadminsecret
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - REDIS_HOST=langfuse-redis
+      - REDIS_PORT=6379
+      - REDIS_AUTH=password123
+
+  # ==========================================
+  # 🌐 【業務層】Mock Web 應用
+  # ==========================================
   web-app:
     build: .
     container_name: onto_web_app
     ports:
       - "5000:5000"
-    # 💡 完美對齊你的啟動路徑，並讓 uvicorn/flask 監聽 0.0.0.0 埠口 5000
     command: ["python", "./src/webapp/mock_gateway.py"]
     environment:
       - APP_ENV=production
     restart: always
 
-  # 3. ⚡ 【工具層】通用 MCP Server（對應你的 server:app）
+  # ==========================================
+  # ⚡ 【工具層】通用 MCP Server
+  # ==========================================
   mcp-server:
     build: .
     container_name: onto_mcp_server
     ports:
       - "8001:8001"
-    # 💡 完美對齊你的 uvicorn 啟動命令，注意：在容器內 host 必須是 0.0.0.0
     command: ["python", "src/mcp_server/server.py"]
     environment:
       - NEO4J_URI=bolt://host.docker.internal:7687
@@ -29,20 +127,30 @@ services:
       - web-app
     restart: always
 
-# 4. 🧠💻 【大腦+前端層】一體化 Agent 服務（src/main.py）
-  # 💡 亮點：這一個容器啟動後，網頁有了，背景 8000 埠口的 API 服務也自動開好了！
+  # ==========================================
+  # 🧠💻 【大腦+前端層】一體化 Agent 服務
+  # ==========================================
   onto-agent-all-in-one:
     build: .
     container_name: onto_agent_all_in_one
     ports:
-      - "8501:8501"  # 瀏覽器訪問 Streamlit
-      - "8000:8000"  # 其他第三方系統或 Postman 訪問 FastAPI
-    # 這裡不寫 command，就會採用 Dockerfile 預設的 streamlit run 指令
+      - "8501:8501"  
+      - "8000:8000"  
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - MCP_SERVER_URL=http://onto_mcp_server:8001/mcp
+      - HUGGINGFACEHUB_API_TOKEN=${HUGGING_FACE_API_KEY}
+      - MCP_SERVER_URL=${MCP_SERVER_URL}
+      
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=http://langfuse-server:3000 
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://langfuse-server:3000/api/public/otel
     depends_on:
       - mcp-server
+      - langfuse-server 
     restart: always
+
+volumes:
+  langfuse_pg_data:

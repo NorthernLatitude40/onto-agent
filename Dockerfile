@@ -17,9 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 1. 大腦依賴 (fastapi, uvicorn, langgraph)
 # 2. MCP 依賴 (mcp, httpx)
 # 3. Web 應用依賴 (例如 sqlmodel, pymysql 等業務所需套件)
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml uv.lock ./
+
+RUN pip install uv && \
+    uv pip install --system -r pyproject.toml
 
 # 複製專案所有原始碼（包含你的 api/, core/, mcp-server/, web_app/ 等）
 COPY . .

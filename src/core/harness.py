@@ -11,6 +11,8 @@ from fastmcp import Client
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.tools import load_mcp_tools
 
+from langfuse.langchain import CallbackHandler
+
 from src.core.agent import Agent
 
 
@@ -31,6 +33,13 @@ class AgentHarness:
         self.agent_core = None  # 存放核心大腦
         self._thread = None
         self.client = None
+
+        # Initialize Langfuse CallbackHandler for Langchain (tracing)
+        self.langfuse_handler = CallbackHandler()
+
+        print(os.getenv("LANGFUSE_HOST"))
+        print(os.getenv("LANGFUSE_PUBLIC_KEY"))
+        print(os.getenv("LANGFUSE_SECRET_KEY"))
 
     def _run_loop(self):
         asyncio.set_event_loop(self.loop)
@@ -82,7 +91,10 @@ class AgentHarness:
             raise RuntimeError("Harness 運行殼尚未就緒！")
 
         inputs = {"messages": [("user", user_message)]}
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "callbacks": [self.langfuse_handler],
+        }
 
         # future = asyncio.run_coroutine_threadsafe(
         #     self.agent_core.app.ainvoke(inputs, config), self.loop
@@ -91,7 +103,7 @@ class AgentHarness:
 
         # 新寫法： 把 self.agent_core 這個大容器傳進去，讓它在事件循環的 Thread 裡「要執行的那一瞬間」才去 self.agent_core.app 拔取最新的圖。
         async def call_wrapper():
-            return await self.agent_core.app.ainvoke(inputs, config)
+            return await self.agent_core.ainvoke(inputs, config)
 
         future = asyncio.run_coroutine_threadsafe(call_wrapper(), self.loop)
         result = future.result()
@@ -103,14 +115,17 @@ class AgentHarness:
             raise RuntimeError("Harness 運行殼尚未就緒！")
 
         inputs = {"messages": [("user", user_message)]}
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "callbacks": [self.langfuse_handler],
+        }
 
         async_q = asyncio.Queue()
 
         async def producer():
             try:
                 # 🚀 關鍵改動：改用 stream_mode="updates"，按節點（Node）產出結果
-                async for chunk in self.agent_core.app.astream(
+                async for chunk in self.agent_core.astream(
                     inputs, config, stream_mode="updates"
                 ):
                     # 1. 🔍 偵測到進入了工具執行節點 (通常叫 tools 或 call_mcp_tool)

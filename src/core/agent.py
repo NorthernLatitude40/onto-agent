@@ -8,15 +8,20 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint  # 🚀 導入 Hugging Face 整合套件
+from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 
 from src.config.config import GEMINI_API_KEY, OPENROUTER_API_KEY
+
 # 🎯 提示：請在 config 檔案中配置 HUGGINGFACEHUB_API_TOKEN
-from src.config.config import HUGGINGFACEHUB_API_TOKEN 
+from src.config.config import HUGGINGFACEHUB_API_TOKEN
 
 from src.core.tools import get_weather, search_official_knowledge_base
 from src.core.workflow import DynamicGraphCompiler
+from langchain_core.runnables import RunnableConfig
+from langfuse import Langfuse
 
+# import atexit
+# atexit.register(self.langfuse.flush)
 
 class State(TypedDict):
     messages: Annotated[list, add_messages]
@@ -29,10 +34,17 @@ class Agent:
 
         # 💡 將熔斷標記綁定在實例上，避免多用戶併發時互相干擾
         self.gemini_available = True
-        self.openrouter_available = True  # 🚀 新增 OpenRouter 狀態追蹤，用以決定是否降級至 HF
+        self.openrouter_available = (
+            True  # 🚀 新增 OpenRouter 狀態追蹤，用以決定是否降級至 HF
+        )
 
         self.app = self._build_graph()  # 光速建立一個最簡單的圖：START -> llm -> END
         self.compiler = DynamicGraphCompiler(state_schema=State)
+        self.langfuse = Langfuse(
+            public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
+            secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
+            host=os.environ.get("LANGFUSE_HOST", "http://langfuse-server:3000")
+        )
 
     def _model(self):
         # 1️⃣ 主要模型：Gemini
@@ -58,7 +70,7 @@ class Agent:
         )
         huggingface = ChatHuggingFace(llm=llm_hf).bind_tools(self.tools)
 
-        def call(state: State):
+        def call(state: State, config: RunnableConfig):
             current_messages = state["messages"]
 
             sys = (
@@ -94,12 +106,12 @@ class Agent:
             response = None
 
             # --- 🤖 階層式模型路由與熔斷狀態機 ---
-            
+
             # 第一階段：嘗試主要模型 (Gemini)
             if self.gemini_available:
                 try:
                     print("🔄 [Level 1] 正在嘗試使用 [主要模型: Gemini] 處理請求...")
-                    response = gemini.invoke(messages_with_sys)
+                    response = gemini.invoke(messages_with_sys, config=config)
                     print("🎉 [Gemini] 請求成功！")
                     return {"messages": [response]}
                 except Exception as gemini_error:
@@ -112,7 +124,7 @@ class Agent:
             if self.openrouter_available and OPENROUTER_API_KEY:
                 try:
                     print("🚀 [Level 2] 正在嘗試使用 [備用模型 1: OpenRouter]...")
-                    response = openrouter.invoke(messages_with_sys)
+                    response = openrouter.invoke(messages_with_sys, config=config)
                     print("🎉 [OpenRouter] 備援成功！")
                     return {"messages": [response]}
                 except Exception as router_error:
@@ -124,23 +136,33 @@ class Agent:
             # 第三階段：嘗試第二備援 (Hugging Face)
             if HUGGINGFACEHUB_API_TOKEN:
                 try:
-                    print("⚡ [Level 3] 進入終極備援，正在嘗試使用 [備用模型 2: Hugging Face]...")
-                    response = huggingface.invoke(messages_with_sys)
+                    print(
+                        "⚡ [Level 3] 進入終極備援，正在嘗試使用 [備用模型 2: Hugging Face]..."
+                    )
+                    response = huggingface.invoke(messages_with_sys, config=config)
                     print("🎉 [Hugging Face] 終極備援成功！")
-                    
+
                     # 印出 MCP 軌跡調試資訊
                     if hasattr(response, "tool_calls") and response.tool_calls:
-                        print("\n================ 🛠️ MCP TOOL CALL DETECTED ================")
+                        print(
+                            "\n================ 🛠️ MCP TOOL CALL DETECTED ================"
+                        )
                         for tool_call in response.tool_calls:
                             print(f"📌 [工具名稱]: {tool_call.get('name')}")
                             print(f"🔑 [原始參數]: {tool_call.get('args')}")
-                        print("===========================================================\n")
-                        
+                        print(
+                            "===========================================================\n"
+                        )
+
                     return {"messages": [response]}
                 except Exception as hf_error:
-                    raise RuntimeError(f"💥 核心崩潰：所有 LLM 模型層級均已失效。最後錯誤: {hf_error}")
+                    raise RuntimeError(
+                        f"💥 核心崩潰：所有 LLM 模型層級均已失效。最後錯誤: {hf_error}"
+                    )
             else:
-                raise RuntimeError("主要與次要模型均失效，且未配置 HUGGINGFACEHUB_API_TOKEN 終極備援。")
+                raise RuntimeError(
+                    "主要與次要模型均失效，且未配置 HUGGINGFACEHUB_API_TOKEN 終極備援。"
+                )
 
         return call
 
@@ -161,7 +183,36 @@ class Agent:
             ui_graph_json, tools_list=tools_list, model=model
         )
 
-    async def ainvoke(self, inputs, config):
+    async def ainvoke(self, inputs, config: dict):
         if not self.app:
             raise ValueError("請先從 UI 畫布編譯並部署工作流！")
-        return await self.app.ainvoke(inputs, config)
+        try:
+            # 4. 正常執行 LangGraph
+            return await self.app.ainvoke(inputs, config)
+        finally:
+            # 💡 5. 關鍵：無論成功或失敗，在非同步程式結束前，強迫將緩衝區的數據推送到 Langfuse Dashboard
+            print("⏳ 正在將 LangGraph 執行軌跡同步至 Langfuse...")
+            try:
+                # 🌟 v4 SDK 提供的异步/同步兼容的强刷机制（内部会处理 OTel 的 flush）
+                self.langfuse.flush()
+            except Exception as e:
+                print(f"⚠️ Langfuse 同步失敗: {e}")
+
+    async def astream(self, inputs, config: dict, stream_mode: str = "updates"):
+        if not self.app:
+            raise ValueError("請先從 UI 畫布編譯並部署工作流！")
+
+        try:
+            # 💡 4. 使用 async for 代理底層 app.astream 的每一次產出（yield）
+            async for chunk in self.app.astream(
+                inputs, config=config, stream_mode=stream_mode
+            ):
+                yield chunk  # 將每一個 chunk 實時吐給前端
+        finally:
+            # 💡 5. 關鍵：當流式輸出結束、或被用戶中斷（如斷開連線）時，強迫推送追蹤數據
+            print("⏳ [Stream] 正在將 LangGraph 流式軌跡同步至 Langfuse...")
+            try:
+                # 🌟 流式结束或客户端主动断开（GeneratorExit）都会触发这里
+                self.langfuse.flush()
+            except Exception as e:
+                print(f"⚠️ Langfuse [Stream] 同步失敗: {e}")

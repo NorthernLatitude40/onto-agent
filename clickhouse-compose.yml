@@ -1,0 +1,79 @@
+version: "3.8"
+
+services:
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse-server
+    restart: unless-stopped
+    ports:
+      - "8123:8123" # HTTP 接口
+      - "9000:9000" # Native TCP 接口 (用于客户端和可视化工具)
+    environment:
+      - CLICKHOUSE_DB=my_database
+      - CLICKHOUSE_USER=my_user
+      - CLICKHOUSE_PASSWORD=my_password
+      # 允许默认用户具有访问管理权限
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      # 请求自带的 ping 接口，无需密码鉴权，返回 200 OK 视为健康
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:8123/ping",
+        ]
+      interval: 10s # 每隔 10 秒检查一次
+      timeout: 5s # 每次检查超时时间
+      retries: 5 # 连续失败 5 次视为 unhealthy
+      start_period: 15s # 容器启动后给 15 秒缓冲时间，期间失败不计入 retries (适合数据量大启动慢的场景)
+
+  langfuse-minio:
+    image: minio/minio
+    restart: always
+    command: server /data --console-address ":9090"
+    ports:
+      - "9001:9000" # S3 API 端口
+      - "9090:9090" # Web 控制台端口 (可用于浏览器查看数据)
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadminsecret
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      - langfuse-minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      /usr/bin/mc alias set myminio http://langfuse-minio:9000 minioadmin minioadminsecret;
+      /usr/bin/mc mb myminio/langfuse --ignore-existing;
+      /usr/bin/mc anonymous set public myminio/langfuse;
+      exit 0;
+      "
+
+  langfuse-redis:
+    image: redis:7-alpine
+    container_name: redis-service-new
+    entrypoint: ["redis-server", "--requirepass", "password123"]
+    volumes:
+      - redis_data_v2:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+
+volumes:
+  clickhouse_data:
+  clickhouse_logs:
+  minio_data:
+  redis_data_v2:
