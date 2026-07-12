@@ -3,6 +3,8 @@ DROP DATABASE IF EXISTS my_agent_db;
 CREATE DATABASE my_agent_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE my_agent_db;
 
+
+
 -- 2. 建立用戶表 (users)
 CREATE TABLE users (
     user_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -26,8 +28,10 @@ CREATE TABLE orders (
     user_id INT,
     order_date DATE,
     total_amount DECIMAL(10, 2),
+    status VARCHAR(8), 
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
+
 
 -- 5. 建立訂單明細表 (order_items)
 CREATE TABLE order_items (
@@ -50,6 +54,7 @@ INSERT INTO users (username, email, registration_date) VALUES
 -- 7. 插入商品測試數據
 -- 生成的自增 ID：iPhone (1), 耳機 (2), 辦公椅 (3), 隨行杯 (4)
 INSERT INTO products (product_name, category, price, stock) VALUES
+('The Jandal Winter', 'Tourist', 1099.00, 10),
 ('iPhone 17 Pro', '電子產品', 36900.00, 50),
 ('無線降噪耳機', '電子產品', 5490.00, 120),
 ('人體工學辦公椅', '家具', 4500.00, 30),

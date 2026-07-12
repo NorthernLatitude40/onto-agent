@@ -14,7 +14,7 @@ logging.getLogger("werkzeug").setLevel(logging.ERROR)
 app = Flask(__name__)
 
 DB_CONFIG = {
-    "host": "localhost",
+    "host": "172.17.0.1",
     "port": 3306,
     "user": "root",
     "password": "root",

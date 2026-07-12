@@ -2,18 +2,17 @@ import os
 import sys
 import logging
 import time
+import traceback  # 新增：用於記錄詳細錯誤堆疊
 from typing import List, Union
 
 import pymysql
 from neo4j import GraphDatabase
-
-# FastMCP 統一導入
+import requests
 from fastmcp import FastMCP
 
-# 引入抽離出來的獨立工具類別與參數契約
-from src.mcp_server.tools.graph_ingestion_tools import GraphIngestionTools
+# 假設這些模組在你的專案路徑中
+from src.ingestion.graph_ingestion_tools import GraphIngestionTools
 from src.ingestion.interface.ontology.output_contract import MappingRule
-import requests
 
 # ==========================================
 # 1. 日誌配置
@@ -22,17 +21,19 @@ log_file = os.path.join(os.path.dirname(__file__), "mcp_server.log")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(log_file, encoding="utf-8")],
+    handlers=[
+        logging.FileHandler(log_file, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),  # 同時印到終端機方便觀察
+    ],
 )
 
 # ==========================================
-# 2. 實例化 FastMCP 伺服器
+# 2. 實例化 FastMCP 與連線設定
 # ==========================================
 mcp = FastMCP("Ontology MCP")
 
-# 資料庫連線設定
 DB_CONFIG = {
-    "host": "localhost",
+    "host": os.getenv("DB_HOST", "172.17.0.1"),
     "port": 3306,
     "user": "root",
     "password": "root",
@@ -41,17 +42,30 @@ DB_CONFIG = {
     "cursorclass": pymysql.cursors.DictCursor,
 }
 
-# Neo4j 連線設定
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password123")
 
-# 全局唯一的 driver 實例
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-
-# 實例化圖匯入工具箱，共享全局唯一的 driver
 ingestion_toolbox = GraphIngestionTools(neo4j_driver=driver)
 
+
+# ==========================================
+# 3. MySQL 輔助函數 (統一錯誤處理)
+# ==========================================
+def get_db_connection():
+    """統一獲取資料庫連接的輔助方法，包含連線日誌"""
+    try:
+        logging.info(
+            f"正在嘗試連接 MySQL -> host: {DB_CONFIG['host']}, db: {DB_CONFIG['database']}"
+        )
+        conn = pymysql.connect(**DB_CONFIG)
+        return conn
+    except Exception as e:
+        logging.error("!!! MySQL 連線失敗 !!!")
+        logging.error(f"錯誤訊息: {str(e)}")
+        logging.error(traceback.format_exc())
+        raise e
 
 # ==========================================
 # 3. 核心功能：大數據圖譜構建雙工具
@@ -85,55 +99,45 @@ def execute_excel_to_graph(file_path: str, mapping_rules: List[MappingRule]) -> 
     """
     return ingestion_toolbox.execute_graph_ingestion(file_path, mapping_rules)
 
-
 # ==========================================
-# 4. 核心功能：MySQL 創建與寫入工具
+# 4. MySQL 工具功能
 # ==========================================
 
 
 @mcp.tool()
 def query_mysql(sql_query: str) -> str:
-    """
-    僅供系統管理員使用。
-    只能查詢統計資料、財務資料、後台維護。
-    不得用來查詢旅遊商品、使用者或建立訂單。
-    """
-    clean_query = sql_query.strip().lower()
-    if not clean_query.startswith("select") and not clean_query.startswith("show"):
+    """僅供系統管理員查詢統計/後台資料。"""
+    if not sql_query.strip().lower().startswith(("select", "show")):
         return "錯誤：僅允許執行 SELECT 或 SHOW 查詢。"
 
+    connection = None
     try:
-        connection = pymysql.connect(**DB_CONFIG)
+        connection = get_db_connection()
         with connection.cursor() as cursor:
             cursor.execute(sql_query)
             return str(cursor.fetchall())
     except Exception as e:
-        return f"錯誤: {str(e)}"
+        return f"資料庫查詢錯誤: {str(e)}"
     finally:
-        if "connection" in locals() and connection.open:
+        if connection and connection.open:
             connection.close()
 
 
 @mcp.tool()
 def find_user_by_username(username: str) -> str:
-    """
-    根據使用者名稱查詢會員資訊。
-    使用情境：使用者提供姓名，建立訂單前取得 user_id。
-    回傳：user_id, username, email, registration_date
-    """
+    """根據使用者名稱查詢會員資訊。"""
+    connection = None
     try:
-        connection = pymysql.connect(**DB_CONFIG)
+        connection = get_db_connection()
         with connection.cursor() as cursor:
             sql = "SELECT * FROM users WHERE username = %s"
             cursor.execute(sql, (username,))
-            result = cursor.fetchall()
-            return str(result)
+            return str(cursor.fetchall())
     except Exception as e:
-        return f"錯誤: {e}"
+        return f"查詢會員失敗: {str(e)}"
     finally:
-        if "connection" in locals() and connection.open:
+        if connection and connection.open:
             connection.close()
-
 
 @mcp.tool()
 def find_product_by_name(product_name: str) -> str:
@@ -156,67 +160,45 @@ def find_product_by_name(product_name: str) -> str:
         if "connection" in locals() and connection.open:
             connection.close()
 
-
 @mcp.tool()
 def create_agent_order(user_id: int, product_id: int, quantity: int) -> str:
-    """
-    若建立訂單缺少任何資訊，必須優先使用工具查詢，查不到時才詢問。
-    當使用者想要購買某個商品時呼叫。
-    此工具會自動聯動寫入 MySQL 的 orders 主表與 order_items 明細表，並返回付款連結。
-    """
-    logging.info("======== 收到 Agent 聯動創建訂單請求 ========")
-
+    """建立訂單並返回付款連結。"""
+    connection = None
     try:
-        connection = pymysql.connect(**DB_CONFIG)
+        connection = get_db_connection()
         with connection.cursor() as cursor:
-            # 1. 補全原本缺漏的：先查詢商品單價 (price) 以計算總價
-            sql_price = "SELECT price FROM products WHERE product_id = %s"
-            cursor.execute(sql_price, (product_id,))
-            product = cursor.fetchone()
-
-            if not product:
-                return f"錯誤：找不到商品 ID {product_id} 的價格資訊。"
-
-            price_per_unit = float(product["price"])
-            total_amount = round(quantity * price_per_unit, 2)
-            current_date = time.strftime("%Y-%m-%d")
-
-            # 2. 寫入 orders 主表
-            sql_order = "INSERT INTO `orders` (`user_id`, `order_date`, `total_amount`, `status`) VALUES (%s, %s, %s, 'PENDING')"
-            cursor.execute(sql_order, (user_id, current_date, total_amount))
-
-            # 3. 獲取自增產生的 order_id
-            new_order_id = cursor.lastrowid
-
-            # 4. 寫入 order_items 明細表
-            sql_item = "INSERT INTO `order_items` (`order_id`, `product_id`, `quantity`, `price_per_unit`) VALUES (%s, %s, %s, %s)"
+            # 獲取價格
             cursor.execute(
-                sql_item, (new_order_id, product_id, quantity, price_per_unit)
+                "SELECT price FROM products WHERE product_id = %s", (product_id,)
             )
+            product = cursor.fetchone()
+            if not product:
+                return f"錯誤：找不到商品 ID {product_id}。"
 
-            # 5. 確認提交交易
+            price = float(product["price"])
+            total = round(quantity * price, 2)
+
+            # 寫入主表
+            cursor.execute(
+                "INSERT INTO `orders` (`user_id`, `order_date`, `total_amount`, `status`) VALUES (%s, %s, %s, 'PENDING')",
+                (user_id, time.strftime("%Y-%m-%d"), total),
+            )
+            new_id = cursor.lastrowid
+
+            # 寫入明細
+            cursor.execute(
+                "INSERT INTO `order_items` (`order_id`, `product_id`, `quantity`, `price_per_unit`) VALUES (%s, %s, %s, %s)",
+                (new_id, product_id, quantity, price),
+            )
             connection.commit()
-
-        logging.info(f"成功聯動寫入 MySQL！主表訂單 ID: {new_order_id}。")
-
-        base_url = "http://localhost:5000"
-        mock_pay_url = f"{base_url}/mock-pay-page?order_id={new_order_id}"
-
-        return (
-            f"【系統通知】訂單已成功同步寫入 MySQL 資料庫！\n"
-            f"✨ 生成系統訂單 ID: {new_order_id}\n"
-            f"👤 用戶 ID: {user_id}\n"
-            f"💰 訂單總金額: {total_amount} 元\n\n"
-            f"請引導使用者點擊以下連結進行模擬支付：\n{mock_pay_url}"
-        )
-
+            return f"訂單 {new_id} 建立成功。付款連結: http://localhost:5000/mock-pay-page?order_id={new_id}"
     except Exception as e:
-        if "connection" in locals():
-            connection.rollback()  # 發生異常時倒滾，確保主從表數據一致性
-        logging.error(f"寫入資料庫失敗: {e}", exc_info=True)
-        return f"建立訂單失敗，資料庫寫入異常: {str(e)}"
+        if connection:
+            connection.rollback()
+        logging.error(f"訂單創建失敗: {traceback.format_exc()}")
+        return f"建立訂單失敗: {str(e)}"
     finally:
-        if "connection" in locals() and connection.open:
+        if connection and connection.open:
             connection.close()
 
 
@@ -366,16 +348,8 @@ def web_search(query: str, max_results: int = 3) -> str:
     except Exception as e:
         return f"搜尋過程中發生錯誤: {str(e)}"
 
-
 # ==========================================
-# 7. 啟動 FastMCP 伺服器
+# 7. 啟動
 # ==========================================
 if __name__ == "__main__":
-    try:
-        mcp.run(
-            transport="http",
-            host="0.0.0.0",
-            port=8001,
-        )
-    finally:
-        driver.close()
+    mcp.run(transport="http", host="0.0.0.0", port=8001)

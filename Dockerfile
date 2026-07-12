@@ -34,5 +34,4 @@ EXPOSE 8001
 EXPOSE 5000
 EXPOSE 8501
 
-# 🌟 預設直接啟動這個全功能單體
-CMD ["streamlit", "run", "./src/main.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+CMD ["python3", "./src/api/agent_server.py"]

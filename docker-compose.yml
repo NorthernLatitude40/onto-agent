@@ -126,16 +126,15 @@ services:
     depends_on:
       - web-app
     restart: always
-
+  
   # ==========================================
-  # 🧠💻 【大腦+前端層】一體化 Agent 服務
+  # 🧠 【大腦層】Agent API (FastAPI)
   # ==========================================
-  onto-agent-all-in-one:
+  agent-api:
     build: .
-    container_name: onto_agent_all_in_one
+    container_name: onto_agent_api
     ports:
-      - "8501:8501"  
-      - "8000:8000"  
+      - "8000:8000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
@@ -147,10 +146,48 @@ services:
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
       - LANGFUSE_HOST=http://langfuse-server:3000 
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://langfuse-server:3000/api/public/otel
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
     depends_on:
       - mcp-server
-      - langfuse-server 
+      - langfuse-server
     restart: always
+
+  # ==========================================
+  # 💻 【前端層】Agent UI (Streamlit)
+  # ==========================================
+  agent-ui:
+    build: .
+    container_name: onto_agent_ui
+    ports:
+      - "8501:8501"
+    environment:
+      - MCP_SERVER_URL=${MCP_SERVER_URL}
+      # 確保 UI 可以連到 API
+      - API_BASE_URL=http://agent-api:8000 
+    depends_on:
+      agent-api:
+        condition: service_healthy
+    command: ["streamlit", "run", "./src/main.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+    restart: always
+
+  # ==========================================
+  # 🤖 【介面層】Discord 機器人
+  # ==========================================
+  discord-bot:
+      build: .
+      container_name: onto_discord_bot
+      restart: always
+      environment:
+        - DISCORD_TOKEN=${DISCORD_TOKEN}
+      command: ["python", "src/ui/discord_bot.py"]
+      depends_on:
+        agent-api:
+          condition: service_healthy
 
 volumes:
   langfuse_pg_data:

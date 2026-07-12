@@ -71,9 +71,29 @@ services:
       timeout: 10s
       retries: 10
 
+  onto-mysql:
+      image: mysql:latest
+      container_name: my-mysql
+      restart: unless-stopped
+      environment:
+        - MYSQL_ROOT_PASSWORD=root # <--- 必须添加此项
+        - MYSQL_PASSWORD=ontomysql
+        - MYSQL_DATABASE=my_agent_db
+        - MYSQL_USER=ontomysql
+      ports:
+        - "3306:3306"
+      volumes:
+        - mysql_data:/var/lib/mysql
+      healthcheck:
+        # 注意：这里的 root 密码必须与上面设置的 MYSQL_ROOT_PASSWORD 一致
+        test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
 
 volumes:
   clickhouse_data:
   clickhouse_logs:
   minio_data:
   redis_data_v2:
+  mysql_data:
