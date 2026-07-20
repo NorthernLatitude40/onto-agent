@@ -15,7 +15,12 @@ from src.config.config import GEMINI_API_KEY, OPENROUTER_API_KEY
 # 🎯 提示：請在 config 檔案中配置 HUGGINGFACEHUB_API_TOKEN
 from src.config.config import HUGGINGFACEHUB_API_TOKEN
 
-from src.core.tools import get_weather, search_official_knowledge_base
+from src.core.tools import (
+    get_weather,
+    search_official_knowledge_base,
+    validate_design_json,
+    generate_excel,
+)
 from src.core.workflow import DynamicGraphCompiler
 from langchain_core.runnables import RunnableConfig
 from langfuse import Langfuse
@@ -23,13 +28,19 @@ from langfuse import Langfuse
 # import atexit
 # atexit.register(self.langfuse.flush)
 
+
 class State(TypedDict):
     messages: Annotated[list, add_messages]
 
 
 class Agent:
     def __init__(self, mcp_tools=None):
-        self.tools = [get_weather, search_official_knowledge_base] + (mcp_tools or [])
+        self.tools = [
+            get_weather,
+            search_official_knowledge_base,
+            validate_design_json,
+            generate_excel,
+        ] + (mcp_tools or [])
         self.tool_node = ToolNode(self.tools)
 
         # 💡 將熔斷標記綁定在實例上，避免多用戶併發時互相干擾
@@ -43,7 +54,7 @@ class Agent:
         self.langfuse = Langfuse(
             public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
             secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
-            host=os.environ.get("LANGFUSE_HOST", "http://langfuse-server:3000")
+            host=os.environ.get("LANGFUSE_HOST", "http://langfuse-server:3000"),
         )
 
     def _model(self):

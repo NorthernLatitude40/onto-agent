@@ -26,7 +26,7 @@ def get_global_agent_worker():
 
 # --- 真正的入口点 ---
 # 无论 Streamlit 页面刷新多少次，这段代码只会触发一次初始化，FastAPI 也只启动一次。
-agent_worker = get_global_agent_worker()
+# agent_worker = get_global_agent_worker()
 
 # 下面继续写你原先的 Streamlit UI 渲染逻辑即可：
-run_ui(agent_worker)
+run_ui()

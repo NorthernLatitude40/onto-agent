@@ -140,7 +140,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - HUGGINGFACEHUB_API_TOKEN=${HUGGING_FACE_API_KEY}
-      - MCP_SERVER_URL=${MCP_SERVER_URL}
+      - MCP_SERVER_URL=http://mcp-server:8001/mcp
       
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
@@ -166,7 +166,7 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - MCP_SERVER_URL=${MCP_SERVER_URL}
+      - MCP_SERVER_URL=http://mcp-server:8001/mcp
       # 確保 UI 可以連到 API
       - API_BASE_URL=http://agent-api:8000 
     depends_on:

@@ -3,11 +3,18 @@ from fastapi import FastAPI, APIRouter
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
+import traceback
+import logging
 from fastapi.responses import StreamingResponse
 import uuid
 from fastapi.middleware.cors import CORSMiddleware  # 💡 導入 CORS 中間件
+import json
+from fastapi.staticfiles import StaticFiles
+import os
+from pathlib import Path
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger("API_SERVICE")
 
 
 # 1. 定義標準的請求載荷（Payload）
@@ -28,39 +35,54 @@ async def health_check():
     return {"status": "healthy", "service": "OntoAgent Core Engine", "version": "1.0.0"}
 
 
+def sse_event(data: dict) -> str:
+    """統一構造 SSE 格式字符串，避免多行 f-string 嵌套 dict 造成的語法/可讀性問題"""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 # 🌟 升級：3. 流式對話接口 (Streaming Chat)
 @router.post("/chat", summary="Agent 流式推理對話")
 async def agent_api_endpoint(payload: ChatPayload):
     # 多租戶/多用戶隔離邏輯
     current_thread_id = payload.session_id or f"api_session_{uuid.uuid4().hex[:8]}"
 
-    # 這裡我們定義一個生成器函數 (Generator)，用來逐字/逐個事件往外吐數據
+    logger.info(
+        f"[/chat] 新請求 thread_id={current_thread_id} message={payload.message!r}"
+    )
+
     async def event_generator():
         try:
-            # 💡 這裡對接你的 LangGraph 工作流的 stream 方法
-            # 假設你的 harness 裡面有一個支持 stream 的方法，例如 harness.stream_interact
-            # 如果目前只有同步的 interact，可以用下面這個模擬流式的效果（或者直接對接 LangGraph 的 stream）
+            # 狀態事件
+            yield sse_event(
+                {
+                    "type": "status",
+                    "content": "OntoAgent 收到請求，正在啟動推理工作流...",
+                }
+            )
 
-            # ── 這裡以標準的 LangGraph 異步流式為例 ──
-            # config = {"configurable": {"thread_id": current_thread_id}}
-            # async for event in google_harness.agent.astream({"messages": [("user", payload.message)]}, config):
-            #     yield f"data: {event}\n\n"
-
-            # 1. 提示客戶端：後端已經收到請求，正在調度 LangGraph
-            yield f"data: [STATUS] OntoAgent 收到請求，正在啟動推理工作流...\n\n"
-
-            # 2. 🌟 真正的真流式：LLM 吐一個字，這裡就包裝成標準 SSE 格式 yield 一個字！
+            # 真正流式輸出
             async for token in global_harness.interact_stream(
-                user_message=payload.message, thread_id=current_thread_id
+                user_message=payload.message,
+                thread_id=current_thread_id,
             ):
-                if token:  # 確保 token 不為空
-                    # ⚠️ 每一段輸出的字，都必須用 data: {token}\n\n 包裹起來
-                    yield f"data: {token}\n\n"
+                if not token:
+                    continue
+                yield sse_event({"type": "token", "content": token})
+
+            # 推理結束
+            yield sse_event({"type": "done"})
+            logger.info(f"[/chat] thread_id={current_thread_id} 推理完成")
 
         except Exception as e:
-            yield f"data: [ERROR] 內部分析出錯: {str(e)}\n\n"
+            # 關鍵修正：異常必須先完整記錄到服務端日誌（含完整 traceback），
+            # 之前的版本只把 str(e) 發給前端，服務端終端永遠看不到堆疊。
+            logger.error(
+                f"[/chat] thread_id={current_thread_id} 發生異常: {e}\n"
+                f"{traceback.format_exc()}"
+            )
 
-    # 使用 FastAPI 內置的 StreamingResponse 返回，媒體類型聲明為 text/event-stream (SSE協議)
+            yield sse_event({"type": "error", "content": str(e)})
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
@@ -104,6 +126,29 @@ def create_api(harness) -> FastAPI:
         allow_methods=["*"],  # 允許所有的請求方法 (POST, GET, OPTIONS 等)
         allow_headers=["*"],  # 允許所有的請求標頭 (Content-Type, Authorization 等)
     )
+
+    # 1. 取得當前執行文件 (main.py) 的目錄絕對路徑
+    BASE_DIR = Path(__file__).resolve().parent.parent
+
+    # 2. 定義 exports 目錄的絕對路徑
+    EXPORTS_DIR = BASE_DIR / "exports"
+
+    # 3. 確保目錄存在
+    if not EXPORTS_DIR.exists():
+        EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # --- 打印日誌 ---
+    print("=" * 50)
+    print(f"🚀 伺服器啟動配置:")
+    print(f"📂 檔案存放目錄 (Absolute Path): {EXPORTS_DIR}")
+    print(f"🌐 靜態文件掛載點 (URL Path): /files")
+    print(f"✅ 檢查目錄狀態: {'存在' if EXPORTS_DIR.exists() else '不存在'}")
+    print("=" * 50)
+    # ----------------
+
+    # 4. 使用絕對路徑進行掛載
+    app.mount("/files", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
+
     app.include_router(router)
 
     return app

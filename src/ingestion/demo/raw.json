@@ -1,0 +1,22 @@
+{
+  "items": [
+    { "No": 1, "项目名称": "Agent 狀態管理", "分类": "核心邏輯", "必须": "是", "栏目号码": "STATE-001", "格式": "TypedDict", "表格": "GlobalState", "栏域": "messages", "備考": "使用 Annotated[list, add_messages] 維護對話序列" },
+    { "No": 2, "项目名称": "Agent 方法集", "分类": "核心邏輯", "必须": "是", "栏目号码": "CORE-002", "格式": "Class Methods", "表格": "Agent", "栏域": "init, model, build_graph", "備考": "包含工作流編譯與非同步介面" },
+    { "No": 3, "项目名称": "熔斷機制狀態", "分类": "狀態追蹤", "必须": "是", "栏目号码": "STATE-003", "格式": "bool", "表格": "StateTracking", "栏域": "gemini_available", "備考": "若 Gemini 失效，觸發第一備援通道" },
+    { "No": 4, "项目名称": "工作流圖結構", "分类": "執行流程", "必须": "是", "栏目号码": "FLOW-004", "格式": "StateGraph", "表格": "ExecutionFlow", "栏域": "nodes, edges", "備考": "定義 START -> agent -> tools 循環" },
+    { "No": 5, "项目名称": "模型層級定義", "分类": "模型配置", "必须": "是", "栏目号码": "MODEL-005", "格式": "Hierarchy", "表格": "ModelHierarchy", "栏域": "primary, backup_1, backup_2", "備考": "包含 Gemini, OpenRouter, HF 模型調用優先級" },
+    { "No": 6, "项目名称": "圖譜架構 Schema", "分类": "知識圖譜", "必须": "否", "栏目号码": "KG-006", "格式": "Ontology", "表格": "DatabaseSchema", "栏域": "ns0__properties", "備考": "定義 ns0 前綴下的屬性與關係類型" },
+    { "No": 7, "项目名称": "觀測性數據同步", "分类": "維運監控", "必须": "是", "栏目号码": "OBS-007", "格式": "Tracing", "表格": "Observability", "栏域": "Langfuse", "備考": "使用 flush 機制進行非同步數據推送" },
+    {
+      "No": 8,
+      "项目名称": "錯誤處理策略",
+      "分类": "異常處理",
+      "必须": "是",
+      "栏目号码": "ERR-008",
+      "格式": "finally block",
+      "表格": "ExceptionHandling", 
+      "栏域": "resource_cleanup",
+      "備考": "各層級錯誤需觸發資源清理與記錄"
+    }
+  ]
+}

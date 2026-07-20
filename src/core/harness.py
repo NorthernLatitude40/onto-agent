@@ -14,6 +14,10 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 from langfuse.langchain import CallbackHandler
 
 from src.core.agent import Agent
+from unittest.mock import MagicMock
+import logging
+
+logger = logging.getLogger("API_SERVICE1")
 
 
 class AgentHarness:
@@ -24,8 +28,8 @@ class AgentHarness:
 
     def __init__(self, mcp_server_url: str = None):
         # 優先使用傳入的參數，其次讀取環境變數，最後使用默認值
-        self.mcp_server_url = mcp_server_url or os.getenv(
-            "MCP_SERVER_URL", "http://127.0.0.1:8001/mcp"
+        self.mcp_server_url = os.getenv(
+            "MCP_SERVER_URL1", "http://127.0.0.1:8001/mcp"
         )
         print(f"🚀 [Harness] 預備連接至 MCP 伺服器: {self.mcp_server_url}")
 
@@ -36,6 +40,7 @@ class AgentHarness:
 
         # Initialize Langfuse CallbackHandler for Langchain (tracing)
         self.langfuse_handler = CallbackHandler()
+
 
         print(os.getenv("LANGFUSE_HOST"))
         print(os.getenv("LANGFUSE_PUBLIC_KEY"))
@@ -128,6 +133,7 @@ class AgentHarness:
                 async for chunk in self.agent_core.astream(
                     inputs, config, stream_mode="updates"
                 ):
+                    logger.debug(f"[interact_stream] 收到原始 chunk: {chunk}")   # ← 加这一行
                     # 1. 🔍 偵測到進入了工具執行節點 (通常叫 tools 或 call_mcp_tool)
                     if "tools" in chunk:
                         tool_messages = chunk["tools"].get("messages", [])
@@ -175,7 +181,18 @@ class AgentHarness:
                 await async_q.put(None)  # 結束標記
 
         # 投遞到後台 loop 異步執行
-        asyncio.run_coroutine_threadsafe(producer(), self.loop)
+        logger.info(f"[interact_stream] self.loop 狀態檢查: is_running={self.loop.is_running()}, is_closed={self.loop.is_closed()}")
+
+        future = asyncio.run_coroutine_threadsafe(producer(), self.loop)
+
+        # 關鍵：加一個回調，一旦 producer() 內部有任何調度層面的失敗，立刻打印出來
+        def _on_producer_done(fut):
+            try:
+                fut.result()  # 如果 producer() 執行過程中有異常，這裡會重新拋出
+            except Exception:
+                logger.error(f"[interact_stream] producer 協程執行失敗:\n{traceback.format_exc()}")
+
+        future.add_done_callback(_on_producer_done)
 
         # 在當前異步上下文中消費這個隊列
         while True:
