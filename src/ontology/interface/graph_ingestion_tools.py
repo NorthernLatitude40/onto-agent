@@ -4,9 +4,9 @@ import traceback
 from typing import List
 import pandas as pd
 from pydantic import BaseModel, Field
-from src.ingestion.excel_loader import ExcelSchemaDiscoverer
-from src.ingestion.interface.ontology.output_contract import MappingRule
-from src.ingestion.interface.neo4j.neo4j_builder import Neo4jBuilder
+from ontology.interface.excel_loader import ExcelSchemaDiscoverer
+from ontology.interface.ontology.output_contract import MappingRule
+from ontology.interface.neo4j.neo4j_builder import Neo4jBuilder
 
 
 class IngestionInput(BaseModel):

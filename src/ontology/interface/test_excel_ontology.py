@@ -1,7 +1,7 @@
 import os
-from excel_loader import ExcelSchemaDiscoverer
-from interface.ontology.input_contract import DatasetSchemaInput
-from interface.ontology.ontology_builder import LLMOntologyBuilder
+from ontology.interface.excel_loader import ExcelSchemaDiscoverer
+from ontology.interface.ontology.input_contract import DatasetSchemaInput
+from ontology.interface.ontology.ontology_builder import LLMOntologyBuilder
 
 if __name__ == "__main__":
     # 1. 動態取得當前腳本所在的資料夾路徑

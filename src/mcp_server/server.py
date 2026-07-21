@@ -11,8 +11,8 @@ import requests
 from fastmcp import FastMCP
 
 # 假設這些模組在你的專案路徑中
-from src.ingestion.graph_ingestion_tools import GraphIngestionTools
-from src.ingestion.interface.ontology.output_contract import MappingRule
+from src.ontology.interface.graph_ingestion_tools import GraphIngestionTools
+from src.ontology.interface.ontology.output_contract import MappingRule
 
 # ==========================================
 # 1. 日誌配置

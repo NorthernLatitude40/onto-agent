@@ -1,5 +1,5 @@
 # api/agent_api.py
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException 
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
@@ -12,6 +12,7 @@ import json
 from fastapi.staticfiles import StaticFiles
 import os
 from pathlib import Path
+import shutil
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger("API_SERVICE")
@@ -85,6 +86,21 @@ async def agent_api_endpoint(payload: ChatPayload):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+UPLOAD_DIR = "/home/ww/projects/langgraph_workspace/uploads"
+
+# 1. 專門處理檔案上傳的接口 (0 Token)
+@router.post("/upload")
+async def upload_code(file: UploadFile = File(...)):
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    return {
+        "status": "success",
+        "file_path": file_path  # 回傳路徑給前端，後續對話可引用
+    }
 
 @router.post("/workflow/run")
 async def deploy_canvas(graph_dto: dict):

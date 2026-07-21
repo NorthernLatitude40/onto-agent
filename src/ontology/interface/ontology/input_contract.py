@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import List
-from interface.dataset import DataFieldSchema  # 引用統一欄位定義
+from ontology.interface.dataset import DataFieldSchema  # 引用統一欄位定義
 
 
 class DatasetSchemaInput(BaseModel):

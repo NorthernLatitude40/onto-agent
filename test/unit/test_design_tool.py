@@ -4,7 +4,7 @@ import json
 import datetime
 import opencc
 from openpyxl.styles import PatternFill, Alignment
-from src.core.tools import validate_design_json
+from core.tools.tools import validate_design_json
 
 # 初始化转换器：繁体转简体
 converter = opencc.OpenCC("t2s")

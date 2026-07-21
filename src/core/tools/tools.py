@@ -3,7 +3,7 @@ from langchain_core.tools import tool
 from src.config.config import ANYTHINGLLM_BASE_URL, ANYTHINGLLM_API_KEY, WORKSPACE_SLUG
 
 # 引入 Pydantic 结构
-from src.ingestion.demo.design_schema import DesignDocument
+from src.ingestion.schema.screen_item import DesignDocument
 import json
 import openpyxl
 import os
@@ -21,10 +21,10 @@ mapping = {
     "项目名称": "项目名称",
     "分类": "分类",
     "必须": "必须",
-    "栏目号码": "栏目号码",
-    "格式": "格式",
-    "表格": "表格",
-    "栏域": "栏域",
+    "桁数": "桁数",
+    "フォーマット": "フォーマット",
+    "テーブル": "テーブル",
+    "フィールド": "フィールド",
     "備考": "備考",
 }
 
@@ -73,26 +73,24 @@ def get_weather(city: str) -> str:
 
 @tool
 def validate_design_json(raw_json_str: str) -> str:
-    """
-    接收 LLM 生成的原始 JSON 字串，並強制轉化為標準的設計書 JSON。
-    如果格式不符合 DesignDocument 規範，則會拋出錯誤。
-    """
-    try:
-        # 1. 處理可能的 Markdown 代碼塊格式
-        clean_json = raw_json_str.replace("```json", "").replace("```", "").strip()
+  """接收 LLM 生成的原始 JSON 字串，並強制轉化為標準的設計書 JSON。
 
-        # 2. Pydantic 核心校驗：將野生 JSON 轉為物件並強制校驗
-        data = json.loads(clean_json)
-        design_doc = DesignDocument(**data)
+  如果格式不符合 DesignDocument 規範，則會拋出錯誤。
+  """
+  try:
+    # 1. 處理可能的 Markdown 代碼塊格式
+    clean_json = raw_json_str.replace("```json", "").replace("```", "").strip()
 
-        # 3. 輸出標準化後的 JSON
-        return json.dumps(
-            design_doc.model_dump(),
-            ensure_ascii=False,
-            indent=2,
-        )
-    except Exception as e:
-        raise ValueError(f"设计书 JSON 校验失败：{e}")
+    # 2. Pydantic 核心校驗：將野生 JSON 轉為物件並強制校驗
+    data = json.loads(clean_json)
+    design_doc = DesignDocument(**data)
+
+    # 3. 輸出標準化後的 JSON (使用 by_alias=True 確保輸出時全是當初定義的中文/日文/No 欄位名稱)
+    return json.dumps(
+        design_doc.model_dump(by_alias=True), ensure_ascii=False, indent=2
+    )
+  except Exception as e:
+    raise ValueError(f"设计书 JSON 校验失败：{e}")
 
 
 # 初始化转换器：繁体转简体
@@ -115,7 +113,7 @@ def generate_excel(json_str: str, template_name: str = "template_1.xlsx") -> str
     """
     path = _build_excel(json_str, template_name)
     filename = os.path.basename(path)
-    base_url = "http://0.0.0.0:8000"
+    base_url = "http://127.0.0.1:8000"
     download_url = f"{base_url}/files/{filename}"
 
     return (
@@ -125,52 +123,64 @@ def generate_excel(json_str: str, template_name: str = "template_1.xlsx") -> str
 
 def _build_excel(
     json_str: str,
-    template_name: str = "template_1.xlsx",
+    template_name: str = "詳細設計書.xlsx",  # 依實際檔名調整
 ) -> str:
-    current_dir = Path(__file__).resolve().parent
-    export_dir = current_dir.parent / "exports"
+    current_dir = Path(__file__).resolve().parent.parent
+    export_dir = current_dir.parent.parent / "exports"
     export_dir.mkdir(exist_ok=True)
-    template_path = current_dir.parent / "ingestion" / "demo" / template_name
+    template_path = current_dir.parent / "ingestion" / "templates" / template_name
 
     if not os.path.exists(template_path):
         raise FileNotFoundError(f"模板不存在：{template_path}")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"详细设计书_生成版_{timestamp}.xlsx"
+    filename = f"詳細設計書_生成版_{timestamp}.xlsx"
     output_path = export_dir / filename
 
     wb = openpyxl.load_workbook(template_path)
-    ws = wb.active
+    
+    # 檢查並切換到「畫面項目」sheet
+    target_sheet_name = "画面項目"
+    if target_sheet_name in wb.sheetnames:
+        ws = wb[target_sheet_name]
+    else:
+        raise ValueError(f"Excel 模板中未找到分頁：{target_sheet_name}")
 
     try:
         full_json = json.loads(json_str)
     except json.JSONDecodeError as e:
-        raise ValueError(f"JSON 格式错误：{e}")
+        raise ValueError(f"JSON 格式錯誤：{e}")
 
     # 獲取 items 列表
-    items = full_json.get("畫面項目", [])
+    # 相容兩種來源：畫面設計書（screen_item schema）用 "畫面項目"，
+    # Parser → 設計書 bridge（design_doc_builder）用 "items"
+    items = full_json.get("畫面項目") or full_json.get("items", [])
 
-    # 自動定位表頭行
+    # 自動定位表頭行（在前 10 行內搜尋）
     header_row = None
-    target_headers = ["no", "项目名称"]
-    for row in range(1, 15):
+    target_headers = ["No", "項目名称"]
+    for row in range(1, 11):
         row_values = [
             normalize_key(cell.value) for cell in ws[row] if cell.value is not None
         ]
-        if any(h in row_values for h in target_headers):
+        # 檢查 row_values 是否包含目標表頭（進行模糊或直接比對）
+        if any(any(th in rv for rv in row_values) for th in target_headers):
             header_row = row
             break
 
     if not header_row:
-        raise ValueError("Excel 模板中未找到表头。")
+        raise ValueError("Excel 模板中未找到表頭。")
 
     header_map = {
         normalize_key(cell.value): cell.column for cell in ws[header_row] if cell.value
     }
 
+    # 定義群組行背景色 (灰色)
+    gray_fill = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+
     # 填入數據
     start_row = header_row + 1
-    for i, item in enumerate(items):  # 修正：這裡遍歷的是 list
+    for i, item in enumerate(items):
         row = start_row + i
 
         if item.get("is_group"):
@@ -187,11 +197,9 @@ def _build_excel(
                 cell.alignment = Alignment(horizontal="left", vertical="center")
                 cell.fill = gray_fill
         else:
-
             # 直接根據 header_map 找到對應的欄位
             for header_name, col_idx in header_map.items():
                 # 根據 Excel 表頭從 mapping 取得對應的 JSON Key
-                # 注意：這裡的 header_name 是你在 Excel 讀取到的原始值
                 json_key = mapping.get(header_name)
 
                 if json_key and json_key in item:

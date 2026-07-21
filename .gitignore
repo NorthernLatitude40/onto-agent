@@ -19,3 +19,6 @@ Thumbs.db
 
 # txt
 *.log
+
+# 忽略所有 Windows 備用資料流標記
+*Zone.Identifier
