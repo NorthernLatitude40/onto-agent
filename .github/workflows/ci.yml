@@ -14,22 +14,32 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    # 1. 安裝並設定 uv
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: "latest"
+        enable-cache: true # 開啟快取以大幅加速後續 CI 執行
+
+    # 2. 設定 Python 版本
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
+    # 3. 透過 uv 安裝專案與所有依賴（包含測試工具與可編輯套件）
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install flake8 pytest # 安裝 Linter (flake8) 與測試工具 (pytest)
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        uv sync --all-extras --dev
 
-    - name: Lint with flake8 (語法檢查)
+    # 4. 執行 flake8 語法檢查
+    - name: Lint with flake8
       run: |
-        # 檢查語法錯誤或未定義的變數
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        uv run flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 
-    - name: Test with pytest (自動測試)
+    # 5. 透過 uv 執行 pytest
+    - name: Test with pytest
       run: |
-        pytest
+        uv run pytest
+      env:
+        PYTHONPATH: src
