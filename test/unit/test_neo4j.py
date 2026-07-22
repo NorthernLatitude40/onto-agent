@@ -1,10 +1,12 @@
 from neo4j import GraphDatabase
+import pytest
 
 # 1. 初始化驱动
 driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "zxcvbnm,"))
 
 
 # 2. 定义查询函数
+@pytest.mark.integration
 def get_purchased_products(customer_name):
     # 使用 execute_query 直接运行 Cypher 语句
     records, summary, keys = driver.execute_query(
