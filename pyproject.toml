@@ -42,4 +42,9 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = [".", "src"]
-timeout = 5
+testpaths = ["test/unit"]
+timeout = 5.0
+# 1. 註冊自訂 mark，消除 PytestUnknownMarkWarning
+markers = [
+    "integration: integration tests that require external services",
+]
