@@ -18,9 +18,9 @@ from pathlib import Path
 # 1. 修改映射表為 {Excel表頭: JSON鍵名}
 mapping = {
     "No": "No",
-    "项目名称": "项目名称",
-    "分类": "分类",
-    "必须": "必须",
+    "項目名称": "項目名称",
+    "分類": "分類",
+    "必須": "必須",
     "桁数": "桁数",
     "フォーマット": "フォーマット",
     "テーブル": "テーブル",
@@ -100,10 +100,10 @@ gray_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="sol
 
 
 def normalize_key(key):
-    """将键名统一转换为简体中文，去除前后空格"""
+    """去除键名前后空格，不进行繁简体转换"""
     if key is None:
         return ""
-    return converter.convert(str(key).strip())
+    return str(key).strip()
 
 
 @tool

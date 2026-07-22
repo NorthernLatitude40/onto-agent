@@ -1,7 +1,7 @@
 import pandas as pd
 import uuid
 from typing import List
-from ontology.interface.dataset import TableDataset, DataFieldSchema, SourceType
+from src.ontology.interface.dataset import TableDataset, DataFieldSchema, SourceType
 
 
 class ExcelSchemaDiscoverer:

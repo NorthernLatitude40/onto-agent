@@ -56,7 +56,7 @@ def generate_excel_from_json(json_str, template_name="template_1.xlsx"):
 
     # 自動定位表頭行
     header_row = None
-    target_headers = ["no", "项目名称"]
+    target_headers = ["no", "項目名称"]
     for row in range(1, 15):
         row_values = [normalize_key(cell.value) for cell in ws[row] if cell.value is not None]
         if any(h in row_values for h in target_headers):
@@ -90,13 +90,13 @@ def generate_excel_from_json(json_str, template_name="template_1.xlsx"):
             # 你的 JSON key 為英文，需對應 Excel 的中文標題
             mapping = {
                 "no": "No",
-                "item_name": "项目名称",
-                "category": "分类",
-                "required": "必须",
-                "field_code": "栏目号码",
-                "format": "格式",
-                "table": "表格",
-                "field_name": "栏域",
+                "item_name": "項目名称",
+                "category": "分類",
+                "required": "必須",
+                "field_code": "桁数",
+                "format": "フォーマット",
+                "table": "テーブル",
+                "field_name": "フィールド",
                 "remarks": "備考"
             }
             

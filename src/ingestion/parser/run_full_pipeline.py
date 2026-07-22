@@ -5,7 +5,7 @@
   1. tools.py 所需套件已安裝（httpx / langchain_core / opencc / openpyxl）
   2. src/config/config.py、src/ingestion/schema/screen_item.py 存在於你的專案中
      （這兩個是 tools.py 原本就依賴的模組，這裡沒有一併提供）
-  3. templates/template_1.xlsx 存在，且表頭包含「No、项目名称、分类、必须、
+  3. templates/template_1.xlsx 存在，且表頭包含「No、項目名称、分類、必須、
      桁数、フォーマット、テーブル、フィールド、備考」
 
 執行方式：

@@ -1,6 +1,6 @@
 from typing import List
 import pandas as pd
-from ontology.interface.ontology.output_contract import MappingRule
+from src.ontology.interface.ontology.output_contract import MappingRule
 
 
 class Neo4jBuilder:

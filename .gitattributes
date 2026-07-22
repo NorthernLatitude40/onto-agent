@@ -1,0 +1,15 @@
+# 1. 預設規則：讓 Git 自動偵測文字檔，並統一強制轉成 LF (Linux 格式)
+# 這對 WSL 或 Docker 環境開發非常重要
+* text=auto eol=lf
+
+# 2. 明確指定特定文字檔，強制使用 LF
+*.py    text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+
+# 3. 標記二進位檔 (Binary)
+# 非常重要！這會防止 Git 嘗試去轉換你的 Excel 或圖片檔的換行符號，避免檔案損毀
+*.xlsx  binary
+*.png   binary
+*.jpg   binary

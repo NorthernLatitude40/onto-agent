@@ -6,7 +6,7 @@ functions）轉成 tools.py._build_excel() 看得懂的「設計書」格式：
 
     {
       "items": [
-        {"No": 1, "项目名称": ..., "分类": ..., "必须": ...,
+        {"No": 1, "項目名称": ..., "分類": ..., "必須": ...,
          "桁数": ..., "フォーマット": ..., "テーブル": ..., "フィールド": ..., "備考": ...},
         ...
       ]
@@ -37,9 +37,9 @@ def _is_optional(type_str: Optional[str]) -> bool:
 def _class_row(no: int, index: int, clazz: ClassInfo) -> dict:
     return {
         "No": no,
-        "项目名称": clazz.name,
-        "分类": "類別 (Class)",
-        "必须": "是",
+        "項目名称": clazz.name,
+        "分類": "類別 (Class)",
+        "必須": "是",
         "桁数": f"CLASS-{index:03d}",
         "フォーマット": "Class",
         "テーブル": clazz.name,
@@ -51,9 +51,9 @@ def _class_row(no: int, index: int, clazz: ClassInfo) -> dict:
 def _field_row(no: int, table: str, index: int, field: FieldInfo) -> dict:
     return {
         "No": no,
-        "项目名称": field.name,
-        "分类": "屬性 (Field)",
-        "必须": "否" if _is_optional(field.type) else "是",
+        "項目名称": field.name,
+        "分類": "屬性 (Field)",
+        "必須": "否" if _is_optional(field.type) else "是",
         "桁数": f"{table.upper()}-F{index:03d}",
         "フォーマット": field.type or "Any",
         "テーブル": table,
@@ -68,9 +68,9 @@ def _method_row(no: int, table: str, index: int, method: MethodInfo, prefix: str
 
     return {
         "No": no,
-        "项目名称": method.name,
-        "分类": "方法 (Method)" if prefix == "M" else "函式 (Function)",
-        "必须": "是",
+        "項目名称": method.name,
+        "分類": "方法 (Method)" if prefix == "M" else "函式 (Function)",
+        "必須": "是",
         "桁数": f"{table.upper()}-{prefix}{index:03d}",
         "フォーマット": method.return_type or "None",
         "テーブル": table,
@@ -82,9 +82,9 @@ def _method_row(no: int, table: str, index: int, method: MethodInfo, prefix: str
 def _import_row(no: int, index: int, name: str, table: str) -> dict:
     return {
         "No": no,
-        "项目名称": name,
-        "分类": "依賴 (Import)",
-        "必须": "是",
+        "項目名称": name,
+        "分類": "依賴 (Import)",
+        "必須": "是",
         "桁数": f"IMPORT-{index:03d}",
         "フォーマット": "Module",
         "テーブル": table,

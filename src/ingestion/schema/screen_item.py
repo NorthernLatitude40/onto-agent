@@ -7,9 +7,9 @@ class DesignItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     no: int = Field(..., alias="No", description="序号")
-    item_name: str = Field(..., alias="项目名称", description="项目名称")
-    category: str = Field(..., alias="分类", description="分类")
-    required: str = Field(..., alias="必须", description="是否必须")
+    item_name: str = Field(..., alias="項目名称", description="項目名称")
+    category: str = Field(..., alias="分類", description="分類")
+    required: str = Field(..., alias="必須", description="是否必須")
     field_code: str = Field(..., alias="桁数", description="桁数")
     format: str = Field(..., alias="フォーマット", description="フォーマット")
     table: str = Field(..., alias="テーブル", description="テーブル")

@@ -75,8 +75,8 @@ def cross_check(design_doc: dict, module: ModuleInfo) -> list[str]:
 
     for item in design_doc.get("items", []):
         no = item.get("No")
-        name = item.get("项目名称", "")
-        field_domain = item.get("栏域", "")
+        name = item.get("項目名称", "")
+        field_domain = item.get("フィールド", "")
 
         unmatched = [
             tok for tok in _tokens(field_domain)

@@ -144,7 +144,7 @@ def create_api(harness) -> FastAPI:
     )
 
     # 1. 取得當前執行文件 (main.py) 的目錄絕對路徑
-    BASE_DIR = Path(__file__).resolve().parent.parent
+    BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
     # 2. 定義 exports 目錄的絕對路徑
     EXPORTS_DIR = BASE_DIR / "exports"

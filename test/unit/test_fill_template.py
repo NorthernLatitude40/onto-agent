@@ -79,7 +79,7 @@ def fill_template_dynamically(data, template_name="template_1.xlsx"):
 
     # 自动定位表头行
     header_row = None
-    target_headers = ["no", "项目名称"]
+    target_headers = ["no", "項目名称"]
     for row in range(1, 15):
         row_values = [
             normalize_key(cell.value) for cell in ws[row] if cell.value is not None
@@ -106,7 +106,7 @@ def fill_template_dynamically(data, template_name="template_1.xlsx"):
         # 判断是否为机构行
         if item.get("is_group"):
             # 1. 填入机构名称到第一列
-            ws.cell(row=row, column=1, value=item.get("项目名称"))
+            ws.cell(row=row, column=1, value=item.get("項目名称"))
             
             # 2. 获取当前实际最大列数
             max_col = ws.max_column
@@ -147,10 +147,10 @@ if __name__ == "__main__":
     for entry in raw_data:
         if "机构" in entry:
             # 插入机构行
-            flattened_data.append({"项目名称": entry.get("机构"), "is_group": True})
+            flattened_data.append({"項目名称": entry.get("机构"), "is_group": True})
             # 展开项目
-            if "项目" in entry and isinstance(entry["项目"], list):
-                for item in entry["项目"]:
+            if "項目" in entry and isinstance(entry["項目"], list):
+                for item in entry["項目"]:
                     norm_item = {normalize_key(k): v for k, v in item.items()}
                     norm_item["is_group"] = False
                     flattened_data.append(norm_item)
