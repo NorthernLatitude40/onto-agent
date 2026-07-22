@@ -40,6 +40,6 @@ jobs:
     # 5. 透過 uv 執行 pytest
     - name: Test with pytest
       run: |
-        uv run pytest test/unit -m "not integration" --durations=5
+        uv run pytest test/unit -m "not integration" --durations=5 -o empty_parameter_set_mark=fail_at_collect
       env:
         PYTHONPATH: src
