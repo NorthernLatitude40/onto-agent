@@ -49,7 +49,7 @@ async def on_message(message):
                     data = json.loads(content)
                     if "reply" in data:
                         full_reply = data["reply"]
-                except:
+                except (json.JSONDecodeError, Exception):  # ✅ 指定明確的 Exception
                     # 如果不是 JSON（比如只是纯文本回复），直接追加
                     full_reply += content
 

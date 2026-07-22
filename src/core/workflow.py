@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.prebuilt import tools_condition, ToolNode
+from langgraph.prebuilt import tools_condition
 
 
 class DynamicGraphCompiler:
@@ -15,7 +15,7 @@ class DynamicGraphCompiler:
         graph = StateGraph(self.state_schema)
 
         node_type_mapping = {}
-        llm_node_id = None  # 紀錄大模型的實體 ID
+        # llm_node_id = None  # 紀錄大模型的實體 ID
 
         # 2. 動態添加節點 (Nodes)
         for node in graph_json.get("nodes", []):
@@ -24,7 +24,7 @@ class DynamicGraphCompiler:
             node_type_mapping[node_id] = node_type  # 記錄 ID 的類型
 
             if node_type == "llm":
-                llm_node_id = node_id  # 記住這個 ID (例如 node_8kc8m70it)
+                # llm_node_id = node_id  # 記住這個 ID (例如 node_8kc8m70it)
                 # 這裡可以根據 config 動態生成 model，此處簡化為調用自定義方法
                 graph.add_node(node_id, model)
             elif node_type == "tool_search":

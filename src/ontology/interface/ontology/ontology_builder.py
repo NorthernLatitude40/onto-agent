@@ -1,5 +1,3 @@
-import os
-from openai import OpenAI
 from ontology.interface.ontology.input_contract import DatasetSchemaInput
 from ontology.interface.ontology.output_contract import OntologyBuilderOutput
 

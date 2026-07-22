@@ -14,7 +14,6 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 from langfuse.langchain import CallbackHandler
 
 from src.core.agent import Agent
-from unittest.mock import MagicMock
 import logging
 
 logger = logging.getLogger("API_SERVICE1")

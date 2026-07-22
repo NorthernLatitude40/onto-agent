@@ -1,8 +1,7 @@
 # api/agent_api.py
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException 
+from fastapi import FastAPI, APIRouter, UploadFile, File 
 from pydantic import BaseModel
 from typing import Optional
-import asyncio
 import traceback
 import logging
 from fastapi.responses import StreamingResponse
@@ -155,9 +154,9 @@ def create_api(harness) -> FastAPI:
 
     # --- 打印日誌 ---
     print("=" * 50)
-    print(f"🚀 伺服器啟動配置:")
+    print("🚀 伺服器啟動配置:")
     print(f"📂 檔案存放目錄 (Absolute Path): {EXPORTS_DIR}")
-    print(f"🌐 靜態文件掛載點 (URL Path): /files")
+    print("🌐 靜態文件掛載點 (URL Path): /files")
     print(f"✅ 檢查目錄狀態: {'存在' if EXPORTS_DIR.exists() else '不存在'}")
     print("=" * 50)
     # ----------------

@@ -1,10 +1,10 @@
 import sys
-print("PYTHON =", sys.executable)
 import asyncio
 import traceback
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+print("PYTHON =", sys.executable)
 
 async def main():
     try:

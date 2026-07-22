@@ -13,7 +13,8 @@ gray_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="sol
 
 def normalize_key(key):
     """将键名统一转换为简体中文，去除前后空格"""
-    if key is None: return ""
+    if key is None: 
+        return ""
     return converter.convert(str(key).strip())
 
 def run_test_with_file(file_path="raw.json"):

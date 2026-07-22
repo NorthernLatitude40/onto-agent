@@ -21,7 +21,6 @@ import datetime
 
 from src.ingestion.parser.factory import ParserFactory
 import src.ingestion.parser.python_parser  # noqa: F401 (自動註冊)
-from src.ingestion.bridge.llm_context_builder import build_llm_context
 from src.ingestion.bridge.design_doc_verifier import cross_check
 from src.core.llm_router import router
 from src.ingestion.schema.screen_item import DesignItem
@@ -69,8 +68,8 @@ def run(source_path: str):
     module = parser.parse(source, filename=source_path.split("/")[-1])
 
     # 2. IR → LLM 上下文摘要（取代丟整份原始碼）
-    context = build_llm_context(module)
-    prompt = PROMPT_TEMPLATE.format(context=context)
+    # context = build_llm_context(module)
+    # prompt = PROMPT_TEMPLATE.format(context=context)
 
     # 3. 呼叫 LLM 生成設計書 JSON
     # 若要改回真實 LLM 呼叫，可取消下面註解並改用 call_llm_to_generate_design_doc(prompt)

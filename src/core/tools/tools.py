@@ -7,7 +7,6 @@ from src.ingestion.schema.screen_item import DesignDocument
 import json
 import openpyxl
 import os
-import json
 import datetime
 import opencc
 from openpyxl.styles import PatternFill, Alignment

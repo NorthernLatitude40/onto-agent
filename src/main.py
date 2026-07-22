@@ -1,18 +1,14 @@
 import os
 import sys
+import streamlit as st
+
+from core.harness import AgentHarness
+from ui.app import run_ui
 
 # 获取当前 main.py 的上一级目录（即 src 的上级：根目录）
 root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if root_path not in sys.path:
     sys.path.insert(0, root_path)
-
-import threading  # 🌟 补上这行，解决 NameError
-import uvicorn
-import streamlit as st
-
-from core.harness import AgentHarness
-from api.agent_api import create_api
-from ui.app import run_ui
 
 
 @st.cache_resource
