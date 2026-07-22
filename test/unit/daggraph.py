@@ -1,5 +1,4 @@
 # 把json轉換成langgraph
-import os
 from typing import TypedDict, List, Dict, Any
 from functools import partial
 from dotenv import load_dotenv
@@ -35,19 +34,19 @@ class AgentState(TypedDict):
 
 # 2. 定義節點執行模板 (將來擴展新能力只需在這裡增加函數)
 def run_start_node(state: AgentState, node_data: Dict):
-    print(f"--- 觸發起點節點 ---")
+    print("--- 觸發起點節點 ---")
     # 把初始輸入直接帶入狀態中
     return {"outputs": {**state.get("outputs", {}), "current": "started"}}
 
 
 def run_llm_node(state: AgentState, node_data: Dict):
-    print(f"--- 執行 LLM 節點 ---")
-    prompt_template = node_data.get("prompt", "")
+    print("--- 執行 LLM 節點 ---")
+    # prompt_template = node_data.get("prompt", "")
     model_name = node_data.get("model", "default-model")
 
     # 簡單模擬變量替換 {{topic}} -> state["inputs"]["topic"]
     topic = state["inputs"].get("topic", "")
-    prompt = prompt_template.replace("{{topic}}", topic)
+    # prompt = prompt_template.replace("{{topic}}", topic)
 
     # 這裡調用大模型 (實際開發時換成你的 LangChain / OpenAI Client)
     # api_key = os.getenv("DEEPSEEK_API_KEY") # 後端安全讀取
@@ -63,7 +62,7 @@ def run_llm_node(state: AgentState, node_data: Dict):
 
 
 def run_tool_search_node(state: AgentState, node_data: Dict):
-    print(f"--- 執行 搜尋工具 節點 ---")
+    print("--- 執行 搜尋工具 節點 ---")
     # 拿到上游 LLM 的結果作為搜尋關鍵字
     llm_result = state["outputs"].get("llm_result", "")
 

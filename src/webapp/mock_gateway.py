@@ -1,7 +1,4 @@
-import os
-import sys
 import logging
-import time
 import pymysql
 from flask import Flask, request, jsonify
 

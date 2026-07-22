@@ -3,7 +3,7 @@ import sys
 import logging
 import time
 import traceback  # 新增：用於記錄詳細錯誤堆疊
-from typing import List, Union
+from typing import List
 
 import pymysql
 from neo4j import GraphDatabase

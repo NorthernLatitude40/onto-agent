@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import yaml  # 💡 記得確保你的環境有安裝 pyyaml (pip install pyyaml)
+from core.harness import AgentHarness
 
 # =================================================================
 # 🌟 雙重路徑保險：確保 Python 無論如何都能在 src/ 底下找到 core
@@ -14,7 +15,7 @@ if current_workspace not in sys.path:
 if src_path not in sys.path:
     sys.path.append(src_path)
 
-from core.harness import AgentHarness
+
 
 
 def execute_harness_test(test_suite: str) -> str:

@@ -1,4 +1,3 @@
-import os
 from dotenv import load_dotenv
 from typing import Annotated
 from typing_extensions import TypedDict
@@ -7,7 +6,7 @@ import httpx
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, START
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
