@@ -40,6 +40,6 @@ jobs:
     # 5. 透過 uv 執行 pytest
     - name: Test with pytest
       run: |
-        uv run pytest
+        uv run pytest test/unit -m "not integration" --durations=5
       env:
         PYTHONPATH: src

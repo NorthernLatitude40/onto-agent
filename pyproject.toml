@@ -37,7 +37,9 @@ dev = [
     "black>=26.5.1",
     "pytest>=9.1.1",
     "ruff>=0.15.20",
+    "pytest-timeout>=2.3.1",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = [".", "src"]
+timeout = 5
