@@ -1,31 +1,18 @@
-name: Auto Translate Docs with Gemini
+name: Issue Auto Translator
 
 on:
-  push:
-    branches:
-      - main                  # 當推送到 main 分支時觸發
-    paths:
-      - 'docs/zh-TW/**'        # 只有當繁體中文目錄下的 Markdown 檔案變動時才執行
+  issues:
+    types: [opened, edited] # 當有新 Issue 建立或編輯時觸發
 
 jobs:
   translate:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write # 必須賦予 Issue 寫入權限才能發送留言
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: GPT Translate Action (Powered by Gemini)
-        uses: imaun/gpt-translate-action@v1.9.0
+      - name: Auto Translate Issue
+        uses: lycheeverse/translate-action@v1
         with:
-          provider: 'gemini'                   # 指定使用 Google Gemini API
-          api_key: ${{ secrets.API_KEY }}      # 對應剛才設定的 Secret
-          model: 'gemini-1.5-flash'            # 使用速度快且免費額度高的模型
-          source_lang: 'zh-TW'                 # 來源語言
-          target_lang: 'en'                    # 想翻譯成的目標語言 (如英文)
-          file_patterns: 'docs/zh-TW/**/*.md'  # 要翻譯的文件路徑模式
-          output_folder: 'docs/en'             # 翻譯後存放的目標資料夾
-
-      - name: Auto Commit translated files
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "docs: auto translate via Gemini [skip ci]"
+          gemini-api-key: ${{ secrets.API_KEY }}
+          target-language: 'English'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
