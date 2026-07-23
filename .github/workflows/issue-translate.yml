@@ -1,0 +1,21 @@
+name: Issue Auto Translator
+
+on:
+  issues:
+    types: [opened, edited] # 當有新 Issue 建立或編輯時觸發
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write # 必須賦予 Issue 寫入權限才能發送留言
+    steps:
+      - name: Auto Translate Issue
+        uses: action-shares/github-translator@v1
+        with:
+          # 使用前面設定好的 Gemini 或 OpenAI API Key
+          API_KEY: ${{ secrets.API_KEY }}
+          PROVIDER: 'gemini'             # 或 'openai'
+          TARGET_LANGUAGE: 'English'     # 目標翻譯語言
+          IS_MODIFY_TITLE: 'false'       # 是否直接覆蓋原標題（false 代表追加在留言中）
+          APPEND_TRANSLATION: 'true'     # 將翻譯結果作為 Bot 回覆貼在 Issue 下方
