@@ -57,7 +57,7 @@ def main():
     # 3. 設計書 JSON → Excel（呼叫 tools.py 既有的 generate_excel）
     #    注意：generate_excel 是被 @tool 裝飾過的 LangChain tool，
     #    直接呼叫要用 .invoke(...) 或 .func(...)，視你的 langchain_core 版本而定。
-    from core.tools.tools import generate_excel
+    from src.core.tools.tools import generate_excel
 
     result = generate_excel.invoke(
         {"json_str": design_doc_json, "template_name": "template_1.xlsx"}

@@ -21,6 +21,9 @@ from __future__ import annotations
 import re
 
 from src.ingestion.ir.model import ModuleInfo
+from src.ontology.screen_dict import HeaderSemanticResolver
+
+_header_resolver = HeaderSemanticResolver()
 
 
 def _normalize(token: str) -> str:
@@ -74,9 +77,17 @@ def cross_check(design_doc: dict, module: ModuleInfo) -> list[str]:
     warnings: list[str] = []
 
     for item in design_doc.get("items", []):
-        no = item.get("No")
-        name = item.get("項目名称", "")
-        field_domain = item.get("フィールド", "")
+        # 防呆層：design_doc 正常來源（validate_design_json 驗證過的
+        # DesignItem）已經是 canonical key，這裡是 no-op；
+        # 若有人直接拿未經驗證的原始 JSON 呼叫 cross_check，
+        # 舊式的表頭原文 key（"No"/"項目名称"/"フィールド"）也能對上。
+        normalized_item = {
+            (_header_resolver.resolve(k) or k): v for k, v in item.items()
+        }
+
+        no = normalized_item.get("no")
+        name = normalized_item.get("item_name", "")
+        field_domain = normalized_item.get("field_name", "")
 
         unmatched = [
             tok for tok in _tokens(field_domain)

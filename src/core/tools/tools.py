@@ -12,21 +12,7 @@ import opencc
 from openpyxl.styles import PatternFill, Alignment
 from pathlib import Path
 
-# 將 JSON 的 key 映射到 Excel
-# 你的 JSON key 為英文，需對應 Excel 的中文標題
-# 1. 修改映射表為 {Excel表頭: JSON鍵名}
-mapping = {
-    "No": "No",
-    "項目名称": "項目名称",
-    "分類": "分類",
-    "必須": "必須",
-    "桁数": "桁数",
-    "フォーマット": "フォーマット",
-    "テーブル": "テーブル",
-    "フィールド": "フィールド",
-    "備考": "備考",
-}
-
+from src.ontology.screen_dict import HeaderSemanticResolver, SheetSemanticResolver
 
 @tool
 def search_official_knowledge_base(query: str) -> str:
@@ -104,6 +90,9 @@ def normalize_key(key):
         return ""
     return str(key).strip()
 
+# resolver 只需在模組載入時建立一次，之後重複使用
+_header_resolver = HeaderSemanticResolver()
+_sheet_resolver = SheetSemanticResolver()
 
 @tool
 def generate_excel(json_str: str, template_name: str = "template_1.xlsx") -> str:
@@ -122,7 +111,7 @@ def generate_excel(json_str: str, template_name: str = "template_1.xlsx") -> str
 
 def _build_excel(
     json_str: str,
-    template_name: str = "詳細設計書.xlsx",  # 依實際檔名調整
+    template_name: str = "template_1.xlsx",
 ) -> str:
     current_dir = Path(__file__).resolve().parent.parent
     export_dir = current_dir.parent.parent / "exports"
@@ -137,42 +126,28 @@ def _build_excel(
     output_path = export_dir / filename
 
     wb = openpyxl.load_workbook(template_path)
-    
-    # 檢查並切換到「畫面項目」sheet
-    target_sheet_name = "画面項目"
-    if target_sheet_name in wb.sheetnames:
-        ws = wb[target_sheet_name]
-    else:
-        raise ValueError(f"Excel 模板中未找到分頁：{target_sheet_name}")
+
+    # 用別名機制找出目標分頁，取代原本寫死的 `target_sheet_name = "画面項目"`
+    ws = _sheet_resolver.get_sheet(wb, default_index=0)
 
     try:
         full_json = json.loads(json_str)
     except json.JSONDecodeError as e:
         raise ValueError(f"JSON 格式錯誤：{e}")
 
-    # 獲取 items 列表
-    # 相容兩種來源：畫面設計書（screen_item schema）用 "畫面項目"，
+    # 相容兩種來源：畫面設計書（screen_item schema）用「畫面項目」，
     # Parser → 設計書 bridge（design_doc_builder）用 "items"
     items = full_json.get("畫面項目") or full_json.get("items", [])
 
-    # 自動定位表頭行（在前 10 行內搜尋）
-    header_row = None
-    target_headers = ["No", "項目名称"]
-    for row in range(1, 11):
-        row_values = [
-            normalize_key(cell.value) for cell in ws[row] if cell.value is not None
-        ]
-        # 檢查 row_values 是否包含目標表頭（進行模糊或直接比對）
-        if any(any(th in rv for rv in row_values) for th in target_headers):
-            header_row = row
-            break
-
-    if not header_row:
-        raise ValueError("Excel 模板中未找到表頭。")
-
-    header_map = {
-        normalize_key(cell.value): cell.column for cell in ws[header_row] if cell.value
-    }
+    # 自動定位表頭列 + 建立 canonical column map
+    scan_rows = [
+        [cell.value for cell in row]
+        for row in ws.iter_rows(min_row=1, max_row=10)
+    ]
+    header_row_idx, col_map = _header_resolver.find_header_row(scan_rows, min_matches=3)
+    if header_row_idx is None:
+        raise ValueError("Excel 模板中未找到可辨識的表頭。")
+    header_row = header_row_idx + 1  # ws.iter_rows 是 0-based，openpyxl 儲存格是 1-based
 
     # 定義群組行背景色 (灰色)
     gray_fill = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
@@ -182,8 +157,15 @@ def _build_excel(
     for i, item in enumerate(items):
         row = start_row + i
 
-        if item.get("is_group"):
-            ws.cell(row=row, column=1, value=item.get("item_name"))
+        # 防呆層：把 item 的 key 統一 resolve 成 canonical key。
+        # design_doc_builder.py 產出的 item 已經是 canonical key，這裡是 no-op；
+        # 若來源是舊格式（中日文 key），這裡仍會被正確轉換。
+        normalized_item = {
+            (_header_resolver.resolve(k) or k): v for k, v in item.items()
+        }
+
+        if normalized_item.get("is_group"):
+            ws.cell(row=row, column=1, value=normalized_item.get("item_name"))
             max_col = ws.max_column
             for merged_range in list(ws.merged_cells.ranges):
                 if merged_range.min_row <= row <= merged_range.max_row:
@@ -196,13 +178,13 @@ def _build_excel(
                 cell.alignment = Alignment(horizontal="left", vertical="center")
                 cell.fill = gray_fill
         else:
-            # 直接根據 header_map 找到對應的欄位
-            for header_name, col_idx in header_map.items():
-                # 根據 Excel 表頭從 mapping 取得對應的 JSON Key
-                json_key = mapping.get(header_name)
-
-                if json_key and json_key in item:
-                    ws.cell(row=row, column=col_idx, value=item[json_key])
+            for canonical_key, col_idx in col_map.items():
+                if canonical_key in normalized_item:
+                    ws.cell(
+                        row=row,
+                        column=col_idx + 1,
+                        value=normalized_item[canonical_key],
+                    )
 
     wb.save(output_path)
     return str(output_path)
