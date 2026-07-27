@@ -16,7 +16,6 @@ from src.ingestion.ir.model import (
     ForStatement,
     IfStatement,
     MethodInfo,
-    ModuleInfo,
     Statement,
     TryStatement,
     WhileStatement,

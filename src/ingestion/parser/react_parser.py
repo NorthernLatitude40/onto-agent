@@ -3,17 +3,17 @@ from __future__ import annotations
 import warnings
 from typing import Optional
 
-# tree-sitter-languages 目前釋出的版本仍呼叫舊版 tree-sitter 的 Language(path, name)
-# 建構子，會跳出 FutureWarning，這裡先過濾掉避免污染 log。等 tree-sitter-languages
-# 更新相容新版 API 之後可以移除這行。
-warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
-
 from tree_sitter_languages import get_parser
 
 from src.ingestion.ir.model import ModuleInfo
 from src.ingestion.parser.base import BaseParser
 from src.ingestion.parser.factory import ParserFactory
 from src.ingestion.parser.react_visitor import ReactVisitor
+
+# tree-sitter-languages 目前釋出的版本仍呼叫舊版 tree-sitter 的 Language(path, name)
+# 建構子，會跳出 FutureWarning，這裡先過濾掉避免污染 log。等 tree-sitter-languages
+# 更新相容新版 API 之後可以移除這行。
+warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
 
 # tsx 語法是 jsx 的超集（多了型別標註），兩種副檔名都用同一個 grammar 解析即可。
 _TREE_SITTER_LANGUAGE = "tsx"
