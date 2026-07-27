@@ -1,3 +1,5 @@
+import pytest
+pytestmark = pytest.mark.integration
 import httpx
 
 # 🛠️ 手動填入你的環境變數進行測試

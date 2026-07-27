@@ -1,3 +1,5 @@
+import pytest
+pytestmark = pytest.mark.integration
 import asyncio
 import traceback
 
@@ -27,4 +29,4 @@ async def main():
     except (RuntimeError, OSError):
         traceback.print_exc()
 
-asyncio.run(main())
+# asyncio.run(main())
