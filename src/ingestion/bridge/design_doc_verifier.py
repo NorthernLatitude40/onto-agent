@@ -94,10 +94,9 @@ def cross_check(design_doc: dict, module: ModuleInfo) -> list[str]:
             if _normalize(tok) not in identifiers and _normalize(tok)
         ]
 
-        if unmatched and _tokens(field_domain):
-            # 只有「全部 token 都對不上」才視為需要複核；
-            # 部分對得上代表這一列大致有結構依據，只是措辭不同。
-            if len(unmatched) == len(_tokens(field_domain)):
+        domain_tokens = _tokens(field_domain)
+        if unmatched and domain_tokens and len(unmatched) == len(domain_tokens):
+
                 warnings.append(
                     f"[No.{no}] 「{name}」的栏域「{field_domain}」在程式碼中找不到對應識別符，"
                     f"可能為概念性摘要，建議人工複核"

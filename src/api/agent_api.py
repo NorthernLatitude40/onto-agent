@@ -1,17 +1,18 @@
 # api/agent_api.py
-from fastapi import FastAPI, APIRouter, UploadFile, File 
-from pydantic import BaseModel
-from typing import Optional
-import traceback
-import logging
-from fastapi.responses import StreamingResponse
-import uuid
-from fastapi.middleware.cors import CORSMiddleware  # 💡 導入 CORS 中間件
 import json
-from fastapi.staticfiles import StaticFiles
+import logging
 import os
+import traceback
+import uuid
 from pathlib import Path
-import shutil
+from typing import Annotated
+
+import aiofiles
+from fastapi import APIRouter, FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware  # 💡 導入 CORS 中間件
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger("API_SERVICE")
@@ -20,7 +21,7 @@ logger = logging.getLogger("API_SERVICE")
 # 1. 定義標準的請求載荷（Payload）
 class ChatPayload(BaseModel):
     message: str
-    session_id: Optional[str] = None  # 允許外部傳入自訂的會話 ID，用於辨識不同用戶
+    session_id: str | None = None  # 允許外部傳入自訂的會話 ID，用於辨識不同用戶
 
 
 # 4. 工廠函數：創立 FastAPI 實例並注入全局 harness
@@ -73,7 +74,7 @@ async def agent_api_endpoint(payload: ChatPayload):
             yield sse_event({"type": "done"})
             logger.info(f"[/chat] thread_id={current_thread_id} 推理完成")
 
-        except Exception as e:
+        except (ImportError, Exception) as e:
             # 關鍵修正：異常必須先完整記錄到服務端日誌（含完整 traceback），
             # 之前的版本只把 str(e) 發給前端，服務端終端永遠看不到堆疊。
             logger.error(
@@ -89,12 +90,13 @@ UPLOAD_DIR = "/home/ww/projects/langgraph_workspace/uploads"
 
 # 1. 專門處理檔案上傳的接口 (0 Token)
 @router.post("/upload")
-async def upload_code(file: UploadFile = File(...)):
+async def upload_code(file: Annotated[UploadFile, File()]):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    content = await file.read()
+    async with aiofiles.open(file_path, "wb") as buffer:
+        buffer.write(content)
         
     return {
         "status": "success",

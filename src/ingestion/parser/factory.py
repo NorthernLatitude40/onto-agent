@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import TypeVar
+from typing import ClassVar, TypeVar
 
 from src.ingestion.parser.base import BaseParser
 
@@ -22,8 +22,8 @@ class ParserFactory:
         parser = ParserFactory.get_by_filename("app.py")
     """
 
-    _by_language: dict[str, type[BaseParser]] = {}
-    _by_extension: dict[str, type[BaseParser]] = {}
+    _by_language: ClassVar[dict[str, type[BaseParser]]] = {}
+    _by_extension: ClassVar[dict[str, type[BaseParser]]] = {}
 
     @classmethod
     def register(cls, parser_cls: T) -> T:

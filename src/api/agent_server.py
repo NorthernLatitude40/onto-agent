@@ -1,7 +1,9 @@
-import uvicorn
 import logging
-from src.core.harness import AgentHarness
+
+import uvicorn
+
 from src.api.agent_api import create_api
+from src.core.harness import AgentHarness
 
 # 設定日誌格式
 logging.basicConfig(
@@ -33,7 +35,7 @@ def run_api():
         )
     except Exception as e:
         logger.error(f"❌ [FastAPI] 啟動失敗: {e}", exc_info=True)
-        raise e
+        raise
 
 
 if __name__ == "__main__":

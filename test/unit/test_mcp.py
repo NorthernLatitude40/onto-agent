@@ -1,9 +1,10 @@
-import sys
 import asyncio
+import sys
 import traceback
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+
 print("PYTHON =", sys.executable)
 
 async def main():
@@ -25,7 +26,7 @@ async def main():
 
             print("INIT OK")
 
-    except Exception:
+    except (RuntimeError, OSError):
         traceback.print_exc()
 
 asyncio.run(main())

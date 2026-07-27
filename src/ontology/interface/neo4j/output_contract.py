@@ -1,5 +1,6 @@
+
 from pydantic import BaseModel
-from typing import List, Optional
+
 
 class MigrationMetrics(BaseModel):
     nodes_created: int = 0
@@ -10,5 +11,5 @@ class MigrationMetrics(BaseModel):
 class Neo4jBuilderOutput(BaseModel):
     status: str # "SUCCESS" or "FAILED"
     job_id: str
-    metrics: Optional[MigrationMetrics] = None
-    errors: List[str] = []
+    metrics: MigrationMetrics | None = None
+    errors: list[str] = []

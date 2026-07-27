@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
 from pydantic import BaseModel, Field
-
 
 # =====================================================
 # Base Node
@@ -11,8 +9,8 @@ from pydantic import BaseModel, Field
 class Node(BaseModel):
     """所有IR節點的基類"""
 
-    line: Optional[int] = None
-    column: Optional[int] = None
+    line: int | None = None
+    column: int | None = None
 
 
 # =====================================================
@@ -21,7 +19,6 @@ class Node(BaseModel):
 
 class Statement(Node):
     """所有Statement基類"""
-    pass
 
 
 class AssignStatement(Statement):
@@ -30,7 +27,7 @@ class AssignStatement(Statement):
 
 
 class ReturnStatement(Statement):
-    value: Optional[str] = None
+    value: str | None = None
 
 
 class CallStatement(Statement):
@@ -56,8 +53,8 @@ class WhileStatement(Statement):
 
 
 class ExceptHandlerInfo(Node):
-    exception_type: Optional[str] = None
-    name: Optional[str] = None
+    exception_type: str | None = None
+    name: str | None = None
     body: list[Statement] = Field(default_factory=list)
 
 
@@ -81,7 +78,7 @@ class ImportInfo(Node):
 
 class ParameterInfo(Node):
     name: str
-    type: Optional[str] = None
+    type: str | None = None
 
 
 # =====================================================
@@ -90,8 +87,8 @@ class ParameterInfo(Node):
 
 class FieldInfo(Node):
     name: str
-    type: Optional[str] = None
-    default_value: Optional[str] = None
+    type: str | None = None
+    default_value: str | None = None
 
 
 # =====================================================
@@ -104,7 +101,7 @@ class MethodInfo(Node):
 
     parameters: list[ParameterInfo] = Field(default_factory=list)
 
-    return_type: Optional[str] = None
+    return_type: str | None = None
 
     body: list[Statement] = Field(default_factory=list)
 
@@ -132,9 +129,9 @@ class PropInfo(Node):
     """React 元件的一個 prop（不論是從解構參數或是 TS interface/type 取得）。"""
 
     name: str
-    type: Optional[str] = None
+    type: str | None = None
     required: bool = True
-    default_value: Optional[str] = None
+    default_value: str | None = None
 
 
 class HookCallInfo(Node):
@@ -149,7 +146,7 @@ class ComponentInfo(Node):
     name: str
     kind: str = "function"
     is_default_export: bool = False
-    base: Optional[str] = None
+    base: str | None = None
     props: list[PropInfo] = Field(default_factory=list)
     hooks: list[HookCallInfo] = Field(default_factory=list)
     
@@ -160,9 +157,9 @@ class UIFieldInfo(Node):
     """React 元件內部渲染的 UI 控制項 (如 input, select, textarea, button 等)"""
     tag: str                        # 例如: "input", "select", "textarea", "button"
     type: str = "text"              # 例如: "text", "checkbox", "select"
-    label: Optional[str] = None     # 畫面上的標題/Label (若有)
-    value_binding: Optional[str] = None # 綁定的變數或狀態, 例如 "data.prompt"
-    placeholder: Optional[str] = None
+    label: str | None = None     # 畫面上的標題/Label (若有)
+    value_binding: str | None = None # 綁定的變數或狀態, 例如 "data.prompt"
+    placeholder: str | None = None
     options: list[str] = Field(default_factory=list) # 下拉選單選項 (對應 <option>)
 
 
@@ -171,7 +168,7 @@ class UIFieldInfo(Node):
 # =====================================================
 
 class ModuleInfo(Node):
-    filename: Optional[str] = None
+    filename: str | None = None
     imports: list[ImportInfo] = Field(default_factory=list)
     classes: list[ClassInfo] = Field(default_factory=list)
     functions: list[MethodInfo] = Field(default_factory=list)

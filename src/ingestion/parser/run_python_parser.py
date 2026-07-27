@@ -6,13 +6,11 @@
 """
 import textwrap
 
-from src.ingestion.parser.factory import ParserFactory
-
 # 只要 import 到 python_parser 模組，PythonParser 就會透過
 # @ParserFactory.register 自動完成註冊。之後新增 Java/Go/... Parser
 # 時只需要比照辦理，上層程式碼完全不用修改。
 import src.ingestion.parser.python_parser  # noqa: F401
-
+from src.ingestion.parser.factory import ParserFactory
 
 SOURCE = textwrap.dedent("""
     import os

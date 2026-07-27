@@ -11,6 +11,8 @@ IR (ModuleInfo) → LLM 上下文摘要
 """
 from __future__ import annotations
 
+from typing import Any
+
 from src.ingestion.ir.model import (
     ClassInfo,
     ForStatement,
@@ -20,7 +22,6 @@ from src.ingestion.ir.model import (
     TryStatement,
     WhileStatement,
 )
-from typing import Any
 from src.ontology.screen_dict import BusinessTermResolver
 
 

@@ -1,20 +1,18 @@
 # core/harness.py
-import os
 import asyncio
+import logging
+import os
+import queue
 import threading
 import traceback
-import queue
-from typing import List
 
 # FastMCP 3.4.2+ 高階客戶端
 from fastmcp import Client
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.tools import load_mcp_tools
-
 from langfuse.langchain import CallbackHandler
 
 from src.core.agent import Agent
-import logging
 
 logger = logging.getLogger("API_SERVICE1")
 
@@ -25,7 +23,7 @@ class AgentHarness:
     使用 FastMCP 簡化遠端 MCP 服務的連接與工具鏈整合
     """
 
-    def __init__(self, mcp_server_url: str = None):
+    def __init__(self, mcp_server_url: str | None = None):
         # 優先使用傳入的參數，其次讀取環境變數，最後使用默認值
         self.mcp_server_url = os.getenv(
             "MCP_SERVER_URL1", "http://127.0.0.1:8001/mcp"
@@ -51,7 +49,7 @@ class AgentHarness:
 
     async def _async_init(self):
         """在背景 Loop 中打通網路管道，自動轉換並裝載內核工具"""
-        lc_tools: List[BaseTool] = []
+        lc_tools: list[BaseTool] = []
         try:
             print(f"🔄 [Harness] 正在建立 FastMCP 連接: {self.mcp_server_url}")
 
@@ -174,7 +172,7 @@ class AgentHarness:
                                         elif hasattr(item, "text"):
                                             await async_q.put(item.text)
 
-            except Exception as e:
+            except (ImportError, Exception) as e:
                 await async_q.put(e)
             finally:
                 await async_q.put(None)  # 結束標記
@@ -188,7 +186,7 @@ class AgentHarness:
         def _on_producer_done(fut):
             try:
                 fut.result()  # 如果 producer() 執行過程中有異常，這裡會重新拋出
-            except Exception:
+            except (ImportError, Exception):
                 logger.error(f"[interact_stream] producer 協程執行失敗:\n{traceback.format_exc()}")
 
         future.add_done_callback(_on_producer_done)
@@ -215,7 +213,7 @@ class AgentHarness:
                 # 呼叫上面的異步生成器並轉存到同步隊列
                 async for token in self.interact_stream(user_message, thread_id):
                     sync_q.put(token)
-            except Exception as e:
+            except (ImportError, Exception) as e:
                 sync_q.put(e)
             finally:
                 sync_q.put(None)

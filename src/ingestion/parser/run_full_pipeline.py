@@ -15,10 +15,9 @@ import json
 import textwrap
 from pathlib import Path
 
-from src.ingestion.parser.factory import ParserFactory
 import src.ingestion.parser.python_parser  # noqa: F401  (自動註冊 PythonParser)
 from src.ingestion.bridge.design_doc_builder import build_design_doc
-
+from src.ingestion.parser.factory import ParserFactory
 
 SOURCE = textwrap.dedent("""
     class Order:

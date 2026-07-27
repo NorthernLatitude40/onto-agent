@@ -1,7 +1,9 @@
 import json
 import os
 import sys
+
 import yaml  # 💡 記得確保你的環境有安裝 pyyaml (pip install pyyaml)
+
 from core.harness import AgentHarness
 
 # =================================================================
@@ -36,8 +38,8 @@ def execute_harness_test(test_suite: str) -> str:
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f) or {}
-    except Exception as e:
-        return f"🚨 讀取 YAML 設定檔失敗: {str(e)}"
+    except (RuntimeError, OSError) as e:
+        return f"🚨 讀取 YAML 設定檔失敗: {e!s}"
 
     # 假設 YAML 結構中包含一個 test_cases 列表，如果沒有則給個預設空列表
     test_cases = config_data.get("test_cases", [])
@@ -117,10 +119,10 @@ def execute_harness_test(test_suite: str) -> str:
 
         return summary
 
-    except Exception as e:
+    except (RuntimeError, OSError) as e:
         import traceback
 
-        return f"🚨 運行測試時發生未知錯誤: {str(e)}\n{traceback.format_exc()}"
+        return f"🚨 運行測試時發生未知錯誤: {e!s}\n{traceback.format_exc()}"
 
 
 if __name__ == "__main__":

@@ -1,10 +1,11 @@
 # src/ingestion/schema/screen_item.py
+
 from pydantic import BaseModel, Field
-from typing import List, Optional
+
 
 class DesignItem(BaseModel):
     # 將所有欄位宣告為嚴格包含（預設值改在欄位定義上，但強制 JSON 包含 Key）
-    no: Optional[int] = Field(default=None, description="序號")
+    no: int | None = Field(default=None, description="序號")
     item_name: str = Field(..., description="項目名稱 (Canonical: item_name)")
     category: str = Field(..., description="分類 (Canonical: category)")
     required: str = Field(default="N", description="是否必須 (Y/N)")
@@ -28,4 +29,4 @@ class DesignItem(BaseModel):
 
 
 class DesignDocument(BaseModel):
-    items: List[DesignItem]
+    items: list[DesignItem]

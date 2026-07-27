@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Optional
+from typing import ClassVar
 
 from tree_sitter_languages import get_parser
 
@@ -28,14 +28,14 @@ class ReactParser(BaseParser):
     """
 
     language = "react"
-    extensions = [".jsx", ".tsx"]
+    extensions: ClassVar[list[str]] = [".jsx", ".tsx"]
 
     def __init__(self):
         # tree-sitter 的 parser 物件不是 thread-safe 共用的最佳實踐，
         # 所以每個 ReactParser instance 自己拿一份（ParserFactory 本來就是每次 get_by_* 都 new 一個）。
         self._ts_parser = get_parser(_TREE_SITTER_LANGUAGE)
 
-    def parse(self, source: str, filename: Optional[str] = None) -> ModuleInfo:
+    def parse(self, source: str, filename: str | None = None) -> ModuleInfo:
         source_bytes = source.encode("utf-8")
 
         tree = self._ts_parser.parse(source_bytes)

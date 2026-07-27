@@ -1,20 +1,21 @@
 """
 完整銜接流程：Parser 接進專案主流程並產出自然語言詳細設計書
 """
+import datetime
 import json
 from pathlib import Path
-import datetime
 
-from src.ingestion.parser.factory import ParserFactory
-import src.ingestion.parser.python_parser  # noqa: F401 (自動註冊)
-import src.ingestion.parser.react_parser   # noqa: F401 (自動註冊)
-from src.ingestion.bridge.llm_context_builder import build_llm_context
-from src.ingestion.bridge.design_doc_verifier import cross_check
+from langchain_core.tools import tool
+
+import src.ingestion.parser.python_parser
+import src.ingestion.parser.react_parser  # noqa: F401 (自動註冊)
 from src.core.llm_router import router
+from src.core.tools.tools import generate_excel, validate_design_json
+from src.ingestion.bridge.design_doc_verifier import cross_check
+from src.ingestion.bridge.llm_context_builder import build_llm_context
+from src.ingestion.parser.factory import ParserFactory
 from src.ingestion.schema.screen_item import DesignItem
 from src.ontology.screen_dict import HeaderSemanticResolver
-from src.core.tools.tools import validate_design_json, generate_excel
-from langchain_core.tools import tool
 
 _header_resolver = HeaderSemanticResolver()
 
@@ -95,7 +96,7 @@ def generate_design_doc(
         )
     except Exception as e:
         print(f"❌ Design JSON 驗證失敗: {e}\n原始內容:\n{raw_json_str}")
-        raise e
+        raise
 
     design_doc = json.loads(validated_json)
 
@@ -176,7 +177,7 @@ def call_llm_to_generate_design_doc(prompt: str) -> str:
     # 4. JSON 解析驗證
     try:
         data = json.loads(cleaned_text)
-    except Exception as e:
+    except (ImportError, Exception) as e:
         raise ValueError(f"LLM 回應無法解析為 JSON: {e}\n原始內容:\n{raw_text}")
 
     # 5. 資料結構正規化

@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from tree_sitter import Node
 
 from src.ingestion.ir.model import (
-    ModuleInfo,
-    ImportInfo,
     ComponentInfo,
-    PropInfo,
     HookCallInfo,
+    ImportInfo,
+    ModuleInfo,
+    PropInfo,
 )
 
 # use開頭 + 大寫字母，例如 useState / useEffect / useMyCustomHook
@@ -37,7 +36,7 @@ class ReactVisitor:
         self.module = ModuleInfo()
         # top-level 的 interface / type alias，用來補齊 props 的型別資訊
         # name -> list[(prop_name, type_text, required)]
-        self._type_props: dict[str, list[tuple[str, Optional[str], bool]]] = {}
+        self._type_props: dict[str, list[tuple[str, str | None, bool]]] = {}
         # 記錄透過 `export default Foo;` 額外標記為 default export 的名稱
         self._default_export_names: set[str] = set()
 
@@ -45,7 +44,7 @@ class ReactVisitor:
     # 小工具
     # ------------------------------------------------
 
-    def _text(self, node: Optional[Node]) -> str:
+    def _text(self, node: Node | None) -> str:
         if node is None:
             return ""
         return self.source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
@@ -190,7 +189,7 @@ class ReactVisitor:
         if type_name is None or object_type is None:
             return
 
-        props: list[tuple[str, Optional[str], bool]] = []
+        props: list[tuple[str, str | None, bool]] = []
         for member in object_type.children:
             if member.type != "property_signature":
                 continue
@@ -318,7 +317,7 @@ class ReactVisitor:
         self.module.components.append(component)
 
     @staticmethod
-    def _find_render_body(class_body: Node) -> Optional[Node]:
+    def _find_render_body(class_body: Node) -> Node | None:
         for member in class_body.children:
             if member.type != "method_definition":
                 continue
@@ -335,7 +334,7 @@ class ReactVisitor:
     def _is_capitalized(name: str) -> bool:
         return bool(name) and name[0].isupper()
 
-    def _looks_like_component(self, name: str, body: Optional[Node]) -> bool:
+    def _looks_like_component(self, name: str, body: Node | None) -> bool:
         if not self._is_capitalized(name):
             return False
         if body is None:
@@ -347,7 +346,7 @@ class ReactVisitor:
     # props
     # ------------------------------------------------
 
-    def _extract_props(self, parameters: Optional[Node]) -> list[PropInfo]:
+    def _extract_props(self, parameters: Node | None) -> list[PropInfo]:
         if parameters is None:
             return []
 
@@ -453,7 +452,7 @@ class ReactVisitor:
     # hooks: useState(...) / useEffect(...) / React.useMemo(...)
     # ------------------------------------------------
 
-    def _extract_hooks(self, body: Optional[Node]) -> list[HookCallInfo]:
+    def _extract_hooks(self, body: Node | None) -> list[HookCallInfo]:
         if body is None:
             return []
 
@@ -480,7 +479,7 @@ class ReactVisitor:
         for child in node.children:
             self._walk_for_hooks(child, hooks)
 
-    def _hook_name_from_callee(self, func: Optional[Node]) -> Optional[str]:
+    def _hook_name_from_callee(self, func: Node | None) -> str | None:
         if func is None:
             return None
         if func.type == "identifier":
@@ -495,7 +494,7 @@ class ReactVisitor:
 
     # 在 ReactVisitor 類別中新增方法：
 
-    def _extract_jsx_ui_fields(self, body: Optional[Node]) -> list[dict]:
+    def _extract_jsx_ui_fields(self, body: Node | None) -> list[dict]:
         """從元件 Body 中提取 HTML/React UI 控制項（Input, Select, Textarea, Button 等）。"""
         if body is None:
             return []
@@ -524,7 +523,7 @@ class ReactVisitor:
                             attr_val = self._text(attr_val_node) if attr_val_node else "True"
                             attributes[attr_name] = attr_val.strip("\"'{}")
 
-                line, col = self._loc(node)
+                line, _col = self._loc(node)
                 ui_fields.append({
                     "tag": tag_name,
                     "type": attributes.get("type", tag_name),

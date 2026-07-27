@@ -1,5 +1,5 @@
+
 from pydantic import BaseModel, Field
-from typing import List
 
 
 class IORelatedItem(BaseModel):
@@ -11,6 +11,6 @@ class IORelatedItem(BaseModel):
 
 
 class IORelatedDocument(BaseModel):
-    parameter_list: List[IORelatedItem] = Field(..., description="参数一览")
-    table_list: List[IORelatedItem] = Field(..., description="表一览")
-    file_list: List[IORelatedItem] = Field(..., description="文件一览")
+    parameter_list: list[IORelatedItem] = Field(..., description="参数一览")
+    table_list: list[IORelatedItem] = Field(..., description="表一览")
+    file_list: list[IORelatedItem] = Field(..., description="文件一览")

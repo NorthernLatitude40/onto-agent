@@ -1,24 +1,25 @@
 import os
-from typing import TypedDict, Annotated
-from langgraph.graph import StateGraph, START
+from typing import Annotated, TypedDict
+
+from langchain_core.runnables import RunnableConfig
+from langfuse import Langfuse
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
-from langgraph.checkpoint.memory import MemorySaver
 
-from src.core.tools.tools import (
-    get_weather,
-    search_official_knowledge_base,
-    validate_design_json,
-    generate_excel,
-)
+from src.core.llm_router import router
+from src.core.prompts import AGENT_SYSTEM_PROMPT
 from src.core.tools.generate_design_doc import (
     generate_design_doc,
 )
+from src.core.tools.tools import (
+    generate_excel,
+    get_weather,
+    search_official_knowledge_base,
+    validate_design_json,
+)
 from src.core.workflow import DynamicGraphCompiler
-from langchain_core.runnables import RunnableConfig
-from langfuse import Langfuse
-from src.core.llm_router import router
-from src.core.prompts import AGENT_SYSTEM_PROMPT
 
 # import atexit
 # atexit.register(self.langfuse.flush)
@@ -101,7 +102,7 @@ class Agent:
             try:
                 # 🌟 v4 SDK 提供的异步/同步兼容的强刷机制（内部会处理 OTel 的 flush）
                 self.langfuse.flush()
-            except Exception as e:
+            except (ImportError, Exception) as e:
                 print(f"⚠️ Langfuse 同步失敗: {e}")
 
     async def astream(self, inputs, config: dict, stream_mode: str = "updates"):
@@ -120,5 +121,5 @@ class Agent:
             try:
                 # 🌟 流式结束或客户端主动断开（GeneratorExit）都会触发这里
                 self.langfuse.flush()
-            except Exception as e:
+            except (ImportError, Exception) as e:
                 print(f"⚠️ Langfuse [Stream] 同步失敗: {e}")

@@ -1,5 +1,6 @@
-from typing import List
+
 import pandas as pd
+
 from src.ontology.interface.ontology.output_contract import MappingRule
 
 
@@ -8,7 +9,7 @@ class Neo4jBuilder:
     def __init__(self, driver):
         self.driver = driver
 
-    def build_from_rules(self, df: pd.DataFrame, mapping_rules: List[MappingRule]):
+    def build_from_rules(self, df: pd.DataFrame, mapping_rules: list[MappingRule]):
         """真正負責和 Neo4j 溝通的血肉之軀"""
         if not mapping_rules:
             return
@@ -126,10 +127,10 @@ class Neo4jBuilder:
                         if from_label and to_label:
                             # 直接改成與本體論空間一致的路徑
                             from_uri = (
-                                f"http://example.org/ontology/{str(row[source_col])}"
+                                f"http://example.org/ontology/{row[source_col]!s}"
                             )
                             to_uri = (
-                                f"http://example.org/ontology/{str(row[target_col])}"
+                                f"http://example.org/ontology/{row[target_col]!s}"
                             )
 
                             props_dict = {}

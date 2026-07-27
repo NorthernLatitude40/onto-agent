@@ -1,24 +1,23 @@
 from __future__ import annotations
 
 import ast
-from typing import Optional
 
 from src.ingestion.ir.model import (
-    ModuleInfo,
-    ImportInfo,
-    ClassInfo,
-    MethodInfo,
-    ParameterInfo,
-    FieldInfo,
-    Statement,
     AssignStatement,
-    ReturnStatement,
     CallStatement,
-    IfStatement,
-    ForStatement,
-    WhileStatement,
-    TryStatement,
+    ClassInfo,
     ExceptHandlerInfo,
+    FieldInfo,
+    ForStatement,
+    IfStatement,
+    ImportInfo,
+    MethodInfo,
+    ModuleInfo,
+    ParameterInfo,
+    ReturnStatement,
+    Statement,
+    TryStatement,
+    WhileStatement,
 )
 
 
@@ -29,9 +28,9 @@ class PythonVisitor(ast.NodeVisitor):
 
         self.module = ModuleInfo()
 
-        self.current_class: Optional[ClassInfo] = None
+        self.current_class: ClassInfo | None = None
 
-        self.current_method: Optional[MethodInfo] = None
+        self.current_method: MethodInfo | None = None
 
         # 目前應該把 Statement 塞進哪個 list，支援 if/for/while 的巢狀結構。
         # 進入方法時 push method.body；進入 if/for/while 的子區塊時再 push 對應的 list。

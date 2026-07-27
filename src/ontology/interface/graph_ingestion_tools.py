@@ -1,17 +1,18 @@
 import json
 import os
 import traceback
-from typing import List
+
 import pandas as pd
 from pydantic import BaseModel, Field
+
 from src.ontology.interface.excel_loader import ExcelSchemaDiscoverer
-from src.ontology.interface.ontology.output_contract import MappingRule
 from src.ontology.interface.neo4j.neo4j_builder import Neo4jBuilder
+from src.ontology.interface.ontology.output_contract import MappingRule
 
 
 class IngestionInput(BaseModel):
     file_path: str = Field(description="Excel 檔案的實體絕對路徑或相對路徑")
-    mapping_rules: List[MappingRule] = Field(
+    mapping_rules: list[MappingRule] = Field(
         description="由 Agent 根據 Schema 設計出來的圖映射規則清單"
     )
 
@@ -55,11 +56,11 @@ class GraphIngestionTools:
                     }
                 )
             return json.dumps(schema_summary, ensure_ascii=False, indent=2)
-        except Exception as e:
-            return f"讀取 Excel 結構失敗: {str(e)}"
+        except (ImportError, Exception) as e:
+            return f"讀取 Excel 結構失敗: {e!s}"
 
     def execute_graph_ingestion(
-        self, file_path: str, mapping_rules: List[MappingRule]
+        self, file_path: str, mapping_rules: list[MappingRule]
     ) -> str:
         """
         第二步：執行圖匯入。
@@ -131,13 +132,13 @@ class GraphIngestionTools:
             print("=" * 60 + "\n")
             return "圖資料匯入成功！已透過 Neo4jBuilder 成功寫入 Neo4j。"
 
-        except Exception as e:
+        except (ImportError, Exception) as e:
             print("\n" + "💥" * 20)
             print("🚨 [ERROR] 圖匯入作業發生致命錯誤！")
             print(f"錯誤類型: {type(e).__name__}")
-            print(f"錯誤訊息: {str(e)}")
+            print(f"錯誤訊息: {e!s}")
             print("-" * 40)
             full_traceback = traceback.format_exc()
             print(full_traceback)
             print("💥" * 20 + "\n")
-            return f"執行圖匯入失敗。後端報錯：[{type(e).__name__}] {str(e)}。"
+            return f"執行圖匯入失敗。後端報錯：[{type(e).__name__}] {e!s}。"
