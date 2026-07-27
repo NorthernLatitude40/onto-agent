@@ -29,6 +29,7 @@ class State(TypedDict):
 
 
 class Agent:
+
     def __init__(self, mcp_tools=None):
         self.tools = [
             get_weather,
@@ -37,7 +38,7 @@ class Agent:
             generate_excel,
             generate_design_doc,
         ] + (mcp_tools or [])
-        self.tool_node = ToolNode(self.tools)
+        self.tool_node = ToolNode(self.tools, handle_tool_errors=True)
 
         self.graph = self._build_graph()  # 光速建立一個最簡單的圖：START -> llm -> END
         self.compiler = DynamicGraphCompiler(state_schema=State)
@@ -47,7 +48,6 @@ class Agent:
             host=os.environ.get("LANGFUSE_HOST", "http://langfuse-server:3000"),
         )
         self.router = router.bind_tools(self.tools)
-
 
     def _model(self):
 

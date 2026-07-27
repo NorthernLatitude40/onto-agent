@@ -29,7 +29,7 @@ def run_ui(harness=None):
     # ================= 1.5 側邊欄或頂部：檔案上傳組件 (0 Token 獨立通道) =================
     with st.sidebar:
         st.header("📂 程式碼與文件上傳")
-        uploaded_file = st.file_uploader("上傳要分析的專案檔案", type=["py", "txt", "zip", "json", "md"])
+        uploaded_file = st.file_uploader("上傳要分析的專案檔案", type=["py", "txt", "zip", "json", "md", "tsx"])
         
         if uploaded_file is not None:
             # 避免重複上傳同一個檔案

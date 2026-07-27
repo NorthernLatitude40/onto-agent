@@ -77,9 +77,21 @@ SHEET_ONTOLOGY: Dict[str, List[str]] = {
 # 2. 業務詞條庫（解決 Python 變數名 ➔ Excel 邏輯名稱的自動翻譯/對照）
 BUSINESS_TERM_ONTOLOGY: Dict[str, Dict[str, str]] = {
     "order_id": {"logical_name": "注文ID", "category": "TextBox", "format": "AN10"},
-    "user_id": {"logical_name": "顧客コード", "category": "TextBox", "format": "AN8"},
-    "created_at": {"logical_name": "作成日時", "category": "DatePicker", "format": "YYYY/MM/DD HH:mm"},
-    "status": {"logical_name": "ステータス", "category": "Dropdown", "format": "CodeList"},
+    "user_id": {"logical_name": "顧客代碼", "category": "TextBox", "format": "AN8"},
+    "created_at": {"logical_name": "建立時間", "category": "DatePicker", "format": "YYYY/MM/DD HH:mm"},
+    "status": {"logical_name": "狀態選項", "category": "Dropdown", "format": "CodeList"},
+    "page": {"logical_name": "頁碼", "category": "Number", "format": "Integer"},
+    "page_size": {"logical_name": "每頁筆數", "category": "Number", "format": "Integer"},
+    "access_token": {"logical_name": "身份驗證 Token", "category": "Header", "format": "String"},
+    "error_code": {"logical_name": "錯誤代碼", "category": "String", "format": "AN5"},
+    "error_message": {"logical_name": "錯誤訊息說明", "category": "String", "format": "String"},
+    # UI Component 同義詞對應
+    "nodes": {"logical_name": "流程圖節點列表", "category": "Canvas/State", "format": "Array"},
+    "edges": {"logical_name": "流程圖連線列表", "category": "Canvas/State", "format": "Array"},
+    "onconnect": {"logical_name": "節點連線事件處理", "category": "Event/Function", "format": "Handler"},
+    "reactflow": {"logical_name": "主繪圖畫布區域", "category": "UI/Canvas", "format": "Component"},
+    "controls": {"logical_name": "畫布縮放控制項", "category": "UI/Button", "format": "Component"},
+    "minimap": {"logical_name": "鳥瞰縮圖預覽區", "category": "UI/View", "format": "Component"},
 }
 
 
