@@ -2,15 +2,14 @@ import time
 from typing import Any
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
-from typing import Type
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 from src.config.config import (
     GEMINI_API_KEY,
-    OPENROUTER_API_KEY,
     HUGGINGFACEHUB_API_TOKEN,
+    OPENROUTER_API_KEY,
 )
 
 
@@ -64,19 +63,19 @@ class LLMRouter:
 
     def with_structured_output(
             self,
-            schema: Type[BaseModel],
+            schema: type[BaseModel],
         ):
             """
             為支援的模型開啟 Structured Output，不支援的則略過或印出警告
             """
             try:
                 self.gemini = self.gemini.with_structured_output(schema)
-            except Exception as e:
+            except (ImportError, Exception) as e:
                 print(f"⚠️ Gemini 不支援 structured_output: {e}")
 
             try:
                 self.openrouter = self.openrouter.with_structured_output(schema)
-            except Exception as e:
+            except (ImportError, Exception) as e:
                 print(f"⚠️ OpenRouter 不支援 structured_output: {e}")
 
             # 💡 HuggingFace 不支援 Pydantic schema 呼叫，因此這裡安全略過，
@@ -146,7 +145,7 @@ class LLMRouter:
 
                 return response
 
-            except Exception as e:
+            except (ImportError, Exception) as e:
 
                 print(f"❌ Gemini Failed: {e}")
 
@@ -173,7 +172,7 @@ class LLMRouter:
 
                 return response
 
-            except Exception as e:
+            except (ImportError, Exception) as e:
 
                 print(f"❌ OpenRouter Failed: {e}")
 

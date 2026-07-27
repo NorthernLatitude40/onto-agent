@@ -1,7 +1,8 @@
-import pandas as pd
 import uuid
-from typing import List
-from src.ontology.interface.dataset import TableDataset, DataFieldSchema, SourceType
+
+import pandas as pd
+
+from src.ontology.interface.dataset import DataFieldSchema, SourceType, TableDataset
 
 
 class ExcelSchemaDiscoverer:
@@ -23,7 +24,7 @@ class ExcelSchemaDiscoverer:
         else:
             return "STRING"
 
-    def discover_all_sheets(self) -> List[TableDataset]:
+    def discover_all_sheets(self) -> list[TableDataset]:
         """掃描 Excel 所有 Sheet，並轉換成統一的 Dataset JSON 格式"""
         datasets = []
         source_id = f"src_{uuid.uuid4().hex[:8]}"

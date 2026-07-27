@@ -1,9 +1,10 @@
-import openpyxl
-import os
-import json
 import datetime
+import json
+import os
+
 import opencc
-from openpyxl.styles import PatternFill, Alignment
+import openpyxl
+from openpyxl.styles import Alignment, PatternFill
 
 # 初始化转换器：繁体转简体
 converter = opencc.OpenCC("t2s")
@@ -39,7 +40,7 @@ def load_data_from_json(filename="excel_data.json"):
                 else:
                     processed_data.append(item)
             return processed_data
-    except Exception as e:
+    except (RuntimeError, OSError) as e:
         print(f"错误：解析 JSON 文件失败: {e}")
         return []
 
@@ -52,7 +53,7 @@ def fill_template_dynamically(data, template_name="template_1.xlsx"):
         print(f"错误：未找到模板文件 '{template_name}'")
         return
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
     output_path = os.path.join(current_dir, f"详细设计书_生成版_{timestamp}.xlsx")
 
     wb = openpyxl.load_workbook(template_path)

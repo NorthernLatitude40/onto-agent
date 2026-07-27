@@ -21,8 +21,6 @@ build_design_doc() 的輸出仍是 {"items": [...]}，可直接餵給 generate_e
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from src.ingestion.ir.model import ClassInfo, FieldInfo, MethodInfo, ModuleInfo
 from src.ingestion.schema.screen_item import DesignItem
 from src.ontology.screen_dict import BusinessTermResolver
@@ -30,7 +28,7 @@ from src.ontology.screen_dict import BusinessTermResolver
 _business_resolver = BusinessTermResolver()
 
 
-def _is_optional(type_str: Optional[str]) -> bool:
+def _is_optional(type_str: str | None) -> bool:
     if not type_str:
         return True  # 沒有型別註記，視為未強制要求
     return type_str.startswith("Optional[") or "None" in type_str

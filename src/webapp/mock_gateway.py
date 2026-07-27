@@ -1,6 +1,7 @@
 import logging
+
 import pymysql
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 
 # 只看錯誤日誌，保持控制台乾淨
 logging.basicConfig(
@@ -35,8 +36,8 @@ def mock_pay_page():
             main_order = order_rows[0]
             if main_order["status"] == "PAID":
                 return "<h3>提示：該訂單已支付完成。</h3>"
-    except Exception as e:
-        return f"<h3>資料庫連線異常: {str(e)}</h3>", 500
+    except (RuntimeError, OSError) as e:
+        return f"<h3>資料庫連線異常: {e!s}</h3>", 500
     finally:
         if "connection" in locals() and connection.open:
             connection.close()
@@ -75,7 +76,7 @@ def mock_wechat_webhook():
                 )
                 connection.commit()
                 return jsonify({"return_code": "SUCCESS"}), 200
-        except Exception:
+        except (RuntimeError, OSError):
             pass
         finally:
             if "connection" in locals() and connection.open:

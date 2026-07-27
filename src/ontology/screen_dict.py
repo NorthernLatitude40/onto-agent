@@ -30,17 +30,16 @@ BusinessTermResolver 未改動。
 import re
 import unicodedata
 import warnings
-from typing import Dict, List, Optional
 
 try:
     import opencc
 
     _T2S = opencc.OpenCC("t2s.json")
-except Exception:  # opencc 未安裝時仍可運作，只是不支援繁簡互轉
+except (ImportError, Exception):  # opencc 未安裝時仍可運作，只是不支援繁簡互轉
     _T2S = None
 
 
-def normalize_text(text: Optional[str]) -> str:
+def normalize_text(text: str | None) -> str:
     """統一的文字歸一化：NFKC、去空白（含全形）、繁體轉簡體、小寫化。"""
     if text is None:
         return ""
@@ -53,7 +52,7 @@ def normalize_text(text: Optional[str]) -> str:
 
 
 # 1. 欄位標頭同義詞映射（解決 Excel 模板標頭變更問題）
-HEADER_ONTOLOGY: Dict[str, List[str]] = {
+HEADER_ONTOLOGY: dict[str, list[str]] = {
     "no": ["no", "no.", "項番", "序號", "序号", "id"],
     "item_name": ["項目名称", "項目名稱", "項目名", "項目", "欄位名稱", "label"],
     "category": ["分類", "分类", "種別", "种别", "UI分類", "控制項類型", "component", "type"],
@@ -66,7 +65,7 @@ HEADER_ONTOLOGY: Dict[str, List[str]] = {
 }
 
 # 1b. Sheet 名稱同義詞映射（解決 tools.py 寫死分頁名稱的問題）
-SHEET_ONTOLOGY: Dict[str, List[str]] = {
+SHEET_ONTOLOGY: dict[str, list[str]] = {
     "detail_design_sheet": [
         "画面項目", "畫面項目", "画面项目",
         "详细设计书", "詳細設計書",
@@ -75,19 +74,31 @@ SHEET_ONTOLOGY: Dict[str, List[str]] = {
 }
 
 # 2. 業務詞條庫（解決 Python 變數名 ➔ Excel 邏輯名稱的自動翻譯/對照）
-BUSINESS_TERM_ONTOLOGY: Dict[str, Dict[str, str]] = {
+BUSINESS_TERM_ONTOLOGY: dict[str, dict[str, str]] = {
     "order_id": {"logical_name": "注文ID", "category": "TextBox", "format": "AN10"},
-    "user_id": {"logical_name": "顧客コード", "category": "TextBox", "format": "AN8"},
-    "created_at": {"logical_name": "作成日時", "category": "DatePicker", "format": "YYYY/MM/DD HH:mm"},
-    "status": {"logical_name": "ステータス", "category": "Dropdown", "format": "CodeList"},
+    "user_id": {"logical_name": "顧客代碼", "category": "TextBox", "format": "AN8"},
+    "created_at": {"logical_name": "建立時間", "category": "DatePicker", "format": "YYYY/MM/DD HH:mm"},
+    "status": {"logical_name": "狀態選項", "category": "Dropdown", "format": "CodeList"},
+    "page": {"logical_name": "頁碼", "category": "Number", "format": "Integer"},
+    "page_size": {"logical_name": "每頁筆數", "category": "Number", "format": "Integer"},
+    "access_token": {"logical_name": "身份驗證 Token", "category": "Header", "format": "String"},
+    "error_code": {"logical_name": "錯誤代碼", "category": "String", "format": "AN5"},
+    "error_message": {"logical_name": "錯誤訊息說明", "category": "String", "format": "String"},
+    # UI Component 同義詞對應
+    "nodes": {"logical_name": "流程圖節點列表", "category": "Canvas/State", "format": "Array"},
+    "edges": {"logical_name": "流程圖連線列表", "category": "Canvas/State", "format": "Array"},
+    "onconnect": {"logical_name": "節點連線事件處理", "category": "Event/Function", "format": "Handler"},
+    "reactflow": {"logical_name": "主繪圖畫布區域", "category": "UI/Canvas", "format": "Component"},
+    "controls": {"logical_name": "畫布縮放控制項", "category": "UI/Button", "format": "Component"},
+    "minimap": {"logical_name": "鳥瞰縮圖預覽區", "category": "UI/View", "format": "Component"},
 }
 
 
 class _BaseSemanticResolver:
     """共用的別名索引建置邏輯，HeaderSemanticResolver / SheetSemanticResolver 都基於此。"""
 
-    def __init__(self, ontology: Dict[str, List[str]]):
-        self.lookup: Dict[str, str] = {}
+    def __init__(self, ontology: dict[str, list[str]]):
+        self.lookup: dict[str, str] = {}
         for canonical_key, synonyms in ontology.items():
             for syn in [*synonyms, canonical_key]:
                 key = normalize_text(syn)
@@ -100,7 +111,7 @@ class _BaseSemanticResolver:
                     )
                 self.lookup[key] = canonical_key
 
-    def resolve(self, raw_text: Optional[str]) -> Optional[str]:
+    def resolve(self, raw_text: str | None) -> str | None:
         if not raw_text:
             return None
         return self.lookup.get(normalize_text(raw_text))
@@ -109,17 +120,17 @@ class _BaseSemanticResolver:
 class HeaderSemanticResolver(_BaseSemanticResolver):
     """語義解析器：自動映射 Excel 表頭欄位。"""
 
-    def __init__(self, ontology: Dict[str, List[str]] = HEADER_ONTOLOGY):
+    def __init__(self, ontology: dict[str, list[str]] = HEADER_ONTOLOGY):
         super().__init__(ontology)
 
-    def resolve_columns(self, header_row: List) -> Dict[str, int]:
+    def resolve_columns(self, header_row: list) -> dict[str, int]:
         """
         輸入表頭那一列的儲存格值（依欄位順序），
         回傳 {canonical_key: 0-based column index}。
         找不到對應本體的表頭會被跳過並記錄 warning。
         """
-        column_map: Dict[str, int] = {}
-        unresolved: List[tuple] = []
+        column_map: dict[str, int] = {}
+        unresolved: list[tuple] = []
         for idx, header in enumerate(header_row):
             if header is None or str(header).strip() == "":
                 continue
@@ -143,11 +154,11 @@ class HeaderSemanticResolver(_BaseSemanticResolver):
         return column_map
 
     def find_header_row(
-        self, rows: List[List], min_matches: int = 3
-    ) -> "tuple[Optional[int], Dict[str, int]]":
+        self, rows: list[list], min_matches: int = 3
+    ) -> "tuple[int | None, dict[str, int]]":
         """在整張表裡自動找出辨識出最多欄位的那一列，回傳 (0-based 列索引 or None, column_map)。"""
-        best_row_idx: Optional[int] = None
-        best_map: Dict[str, int] = {}
+        best_row_idx: int | None = None
+        best_map: dict[str, int] = {}
         for row_idx, row in enumerate(rows):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -163,16 +174,16 @@ class HeaderSemanticResolver(_BaseSemanticResolver):
 class SheetSemanticResolver(_BaseSemanticResolver):
     """語義解析器：自動映射 workbook 分頁名稱，取代硬編碼的 sheet 名判斷。"""
 
-    def __init__(self, ontology: Dict[str, List[str]] = SHEET_ONTOLOGY):
+    def __init__(self, ontology: dict[str, list[str]] = SHEET_ONTOLOGY):
         super().__init__(ontology)
 
-    def find_sheet_name(self, sheetnames: List[str]) -> Optional[str]:
+    def find_sheet_name(self, sheetnames: list[str]) -> str | None:
         for name in sheetnames:
             if self.resolve(name) is not None:
                 return name
         return None
 
-    def get_sheet(self, workbook, default_index: Optional[int] = 0):
+    def get_sheet(self, workbook, default_index: int | None = 0):
         """
         1. 先用別名比對 workbook.sheetnames；
         2. 找不到時，default_index 不是 None 就退回該索引的分頁並發出 warning；

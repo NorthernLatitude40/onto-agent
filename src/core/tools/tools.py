@@ -1,18 +1,20 @@
+import datetime
+import json
+import os
+from pathlib import Path
+
 import httpx
+import opencc
+import openpyxl
 from langchain_core.tools import tool
-from src.config.config import ANYTHINGLLM_BASE_URL, ANYTHINGLLM_API_KEY, WORKSPACE_SLUG
+from openpyxl.styles import Alignment, PatternFill
+
+from src.config.config import ANYTHINGLLM_API_KEY, ANYTHINGLLM_BASE_URL, WORKSPACE_SLUG
 
 # 引入 Pydantic 结构
 from src.ingestion.schema.screen_item import DesignDocument
-import json
-import openpyxl
-import os
-import datetime
-import opencc
-from openpyxl.styles import PatternFill, Alignment
-from pathlib import Path
-
 from src.ontology.screen_dict import HeaderSemanticResolver, SheetSemanticResolver
+
 
 @tool
 def search_official_knowledge_base(query: str) -> str:
@@ -42,7 +44,7 @@ def search_official_knowledge_base(query: str) -> str:
 
         return data.get("textResponse", "")
 
-    except Exception as e:
+    except (ImportError, Exception) as e:
         return f"RAG error: {e}"
 
 
@@ -74,7 +76,7 @@ def validate_design_json(raw_json_str: str) -> str:
     return json.dumps(
         design_doc.model_dump(by_alias=True), ensure_ascii=False, indent=2
     )
-  except Exception as e:
+  except (ImportError, Exception) as e:
     raise ValueError(f"设计书 JSON 校验失败：{e}")
 
 

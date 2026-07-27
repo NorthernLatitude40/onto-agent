@@ -1,7 +1,7 @@
-import streamlit as st
-import requests
 import json
 
+import requests
+import streamlit as st
 
 
 def run_ui(harness=None):
@@ -29,11 +29,12 @@ def run_ui(harness=None):
     # ================= 1.5 側邊欄或頂部：檔案上傳組件 (0 Token 獨立通道) =================
     with st.sidebar:
         st.header("📂 程式碼與文件上傳")
-        uploaded_file = st.file_uploader("上傳要分析的專案檔案", type=["py", "txt", "zip", "json", "md"])
+        uploaded_file = st.file_uploader("上傳要分析的專案檔案", type=["py", "txt", "zip", "json", "md", "tsx"])
         
-        if uploaded_file is not None:
-            # 避免重複上傳同一個檔案
-            if st.session_state.get("last_uploaded_name") != uploaded_file.name:
+        if (
+            uploaded_file is not None
+            and st.session_state.get("last_uploaded_name") != uploaded_file.name
+        ):
                 with st.spinner("正在上傳檔案至伺服器指定路徑... (0 Token)"):
                     try:
                         UPLOAD_API_URL = "http://127.0.0.1:8000/api/v1/upload"  # 你的獨立上傳接口
@@ -49,8 +50,8 @@ def run_ui(harness=None):
                         st.session_state.last_uploaded_name = uploaded_file.name
                         
                         st.success(f"檔案上傳成功！\n路徑: {st.session_state.uploaded_file_path}")
-                    except Exception as e:
-                        st.error(f"檔案上傳失敗: {str(e)}")
+                    except (RuntimeError, OSError) as e:
+                        st.error(f"檔案上傳失敗: {e!s}")
 
         if st.session_state.uploaded_file_path:
             st.info(f"📌 當前綁定檔案路徑：\n`{st.session_state.uploaded_file_path}`")
@@ -68,9 +69,7 @@ def run_ui(harness=None):
         st.session_state.chat_history.append({"role": "user", "content": user_query})
 
         # 建立 AI 的對話氣泡
-        with st.chat_message("assistant"):
-            # 引入 st.spinner 動畫
-            with st.spinner("Harness 運行殼調度內核決策中..."):
+        with st.chat_message("assistant"), st.spinner("Harness 運行殼調度內核決策中..."):
                 try:
                     API_URL = "http://127.0.0.1:8000/api/v1/chat"
                     
@@ -126,8 +125,8 @@ def run_ui(harness=None):
                         {"role": "assistant", "content": friendly_text}
                     )
 
-                except Exception as e:
+                except (RuntimeError, OSError) as e:
                     import traceback
                     print("❌ [Harness 執行階段崩潰] 詳細錯誤軌跡如下：")
                     traceback.print_exc()
-                    st.error(f"🛑 駕馭層（Harness）捕獲異常：{str(e)}")
+                    st.error(f"🛑 駕馭層（Harness）捕獲異常：{e!s}")

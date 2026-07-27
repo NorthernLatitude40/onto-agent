@@ -1,12 +1,12 @@
 # 把json轉換成langgraph
-from typing import TypedDict, List, Dict, Any
 from functools import partial
+from typing import Any, TypedDict
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from langgraph.graph import END, StateGraph
 from pydantic import BaseModel
-
-from langgraph.graph import StateGraph, END
 
 # 加載 .env 文件中的 API Keys (安全保存在後端)
 load_dotenv()
@@ -27,19 +27,19 @@ app.add_middleware(
 
 # 1. 定義 LangGraph 的全局狀態機數據結構 (State)
 class AgentState(TypedDict):
-    inputs: Dict[str, Any]  # 初始輸入數據，例如 {"topic": "AI未來的發展"}
-    outputs: Dict[str, Any]  # 記錄各個節點的輸出結果
-    history: List[Dict[str, Any]]  # 執行歷史軌跡
+    inputs: dict[str, Any]  # 初始輸入數據，例如 {"topic": "AI未來的發展"}
+    outputs: dict[str, Any]  # 記錄各個節點的輸出結果
+    history: list[dict[str, Any]]  # 執行歷史軌跡
 
 
 # 2. 定義節點執行模板 (將來擴展新能力只需在這裡增加函數)
-def run_start_node(state: AgentState, node_data: Dict):
+def run_start_node(state: AgentState, node_data: dict):
     print("--- 觸發起點節點 ---")
     # 把初始輸入直接帶入狀態中
     return {"outputs": {**state.get("outputs", {}), "current": "started"}}
 
 
-def run_llm_node(state: AgentState, node_data: Dict):
+def run_llm_node(state: AgentState, node_data: dict):
     print("--- 執行 LLM 節點 ---")
     # prompt_template = node_data.get("prompt", "")
     model_name = node_data.get("model", "default-model")
@@ -61,7 +61,7 @@ def run_llm_node(state: AgentState, node_data: Dict):
     return {"outputs": current_outputs}
 
 
-def run_tool_search_node(state: AgentState, node_data: Dict):
+def run_tool_search_node(state: AgentState, node_data: dict):
     print("--- 執行 搜尋工具 節點 ---")
     # 拿到上游 LLM 的結果作為搜尋關鍵字
     llm_result = state["outputs"].get("llm_result", "")
@@ -86,9 +86,9 @@ NODE_MAP = {
 
 # 4. 接收前端 JSON 的 Pydantic 模型
 class CanvasData(BaseModel):
-    nodes: List[Dict[str, Any]]
-    edges: List[Dict[str, Any]]
-    inputs: Dict[str, Any]  # 用戶點擊執行時輸入的參數，例如 {"topic": "太空科技"}
+    nodes: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
+    inputs: dict[str, Any]  # 用戶點擊執行時輸入的參數，例如 {"topic": "太空科技"}
 
 
 # 5. FastAPI 接口：接收前端畫布數據，動態建圖並執行

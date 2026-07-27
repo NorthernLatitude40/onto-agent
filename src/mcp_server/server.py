@@ -1,14 +1,13 @@
+import logging
 import os
 import sys
-import logging
 import time
 import traceback  # 新增：用於記錄詳細錯誤堆疊
-from typing import List
 
 import pymysql
-from neo4j import GraphDatabase
 import requests
 from fastmcp import FastMCP
+from neo4j import GraphDatabase
 
 # 假設這些模組在你的專案路徑中
 from src.ontology.interface.graph_ingestion_tools import GraphIngestionTools
@@ -63,9 +62,9 @@ def get_db_connection():
         return conn
     except Exception as e:
         logging.error("!!! MySQL 連線失敗 !!!")
-        logging.error(f"錯誤訊息: {str(e)}")
+        logging.error(f"錯誤訊息: {e!s}")
         logging.error(traceback.format_exc())
-        raise e
+        raise
 
 # ==========================================
 # 3. 核心功能：大數據圖譜構建雙工具
@@ -82,7 +81,7 @@ def inspect_excel_schema(file_path: str) -> str:
 
 
 @mcp.tool()
-def execute_excel_to_graph(file_path: str, mapping_rules: List[MappingRule]) -> str:
+def execute_excel_to_graph(file_path: str, mapping_rules: list[MappingRule]) -> str:
     """
     在分析完 Schema 並決定好圖對應規則(Mapping Rules)後，使用此工具將 rows 全量寫入 Neo4j。
 
@@ -116,8 +115,8 @@ def query_mysql(sql_query: str) -> str:
         with connection.cursor() as cursor:
             cursor.execute(sql_query)
             return str(cursor.fetchall())
-    except Exception as e:
-        return f"資料庫查詢錯誤: {str(e)}"
+    except (ImportError, Exception) as e:
+        return f"資料庫查詢錯誤: {e!s}"
     finally:
         if connection and connection.open:
             connection.close()
@@ -133,8 +132,8 @@ def find_user_by_username(username: str) -> str:
             sql = "SELECT * FROM users WHERE username = %s"
             cursor.execute(sql, (username,))
             return str(cursor.fetchall())
-    except Exception as e:
-        return f"查詢會員失敗: {str(e)}"
+    except (ImportError, Exception) as e:
+        return f"查詢會員失敗: {e!s}"
     finally:
         if connection and connection.open:
             connection.close()
@@ -154,7 +153,7 @@ def find_product_by_name(product_name: str) -> str:
             cursor.execute(sql, (f"%{product_name}%",))
             result = cursor.fetchall()
             return str(result)
-    except Exception as e:
+    except (ImportError, Exception) as e:
         return f"錯誤: {e}"
     finally:
         if "connection" in locals() and connection.open:
@@ -192,11 +191,11 @@ def create_agent_order(user_id: int, product_id: int, quantity: int) -> str:
             )
             connection.commit()
             return f"訂單 {new_id} 建立成功。付款連結: http://localhost:5000/mock-pay-page?order_id={new_id}"
-    except Exception as e:
+    except (ImportError, Exception) as e:
         if connection:
             connection.rollback()
         logging.error(f"訂單創建失敗: {traceback.format_exc()}")
-        return f"建立訂單失敗: {str(e)}"
+        return f"建立訂單失敗: {e!s}"
     finally:
         if connection and connection.open:
             connection.close()
@@ -222,7 +221,7 @@ def get_order_by_id(order_id: int) -> str:
             if not result:
                 return f"找不到訂單 ID: {order_id} 的資料。"
             return str(result)
-    except Exception as e:
+    except (ImportError, Exception) as e:
         return f"錯誤: {e}"
     finally:
         if "connection" in locals() and connection.open:
@@ -235,7 +234,7 @@ def get_order_by_id(order_id: int) -> str:
 
 
 @mcp.tool()
-def get_tour_deals_by_city(city_name: str) -> List[str]:
+def get_tour_deals_by_city(city_name: str) -> list[str]:
     """
     利用 n10s 本體推理，查詢指定城市出發或全局的紐西蘭旅遊特惠行程（Deals）。
     """
@@ -300,7 +299,7 @@ def get_tour_deals_by_city(city_name: str) -> List[str]:
 
     except Exception as e:
         logging.error(f"Neo4j 執行推理失敗: {e}", exc_info=True)
-        return [f"ERROR: {str(e)}"]
+        return [f"ERROR: {e!s}"]
 
 
 # ==========================================
@@ -345,8 +344,8 @@ def web_search(query: str, max_results: int = 3) -> str:
 
         return "\n".join(formatted_outputs)
 
-    except Exception as e:
-        return f"搜尋過程中發生錯誤: {str(e)}"
+    except (ImportError, Exception) as e:
+        return f"搜尋過程中發生錯誤: {e!s}"
 
 # ==========================================
 # 7. 啟動

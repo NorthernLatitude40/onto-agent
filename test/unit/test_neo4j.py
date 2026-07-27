@@ -1,5 +1,5 @@
-from neo4j import GraphDatabase
 import pytest
+from neo4j import GraphDatabase
 
 # 1. 初始化驱动
 driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "zxcvbnm,"))
@@ -9,7 +9,7 @@ driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "zxcvbnm,"
 @pytest.mark.integration
 def get_purchased_products(customer_name):
     # 使用 execute_query 直接运行 Cypher 语句
-    records, summary, keys = driver.execute_query(
+    records = driver.execute_query(
         """
         MATCH (c:Customer)-[:BUY]->(p)
         WHERE c.name = $name

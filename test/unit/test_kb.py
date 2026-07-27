@@ -1,3 +1,6 @@
+import pytest
+
+pytestmark = pytest.mark.integration
 import httpx
 
 # 🛠️ 手動填入你的環境變數進行測試
@@ -23,5 +26,5 @@ try:
     print(f"狀態碼: {response.status_code}")
     print("原始回應內容：")
     print(response.text) # 觀察這裏，看 AnythingLLM 到底回傳了什麼
-except Exception as e:
+except (RuntimeError, OSError) as e:
     print(f"連線失敗: {e}")

@@ -1,7 +1,9 @@
-import discord
-import aiohttp
 import asyncio
-from src.config.config import DISCORD_TOKEN, AGENT_SERVER_URL
+
+import aiohttp
+import discord
+
+from src.config.config import AGENT_SERVER_URL, DISCORD_TOKEN
 
 TOKEN = DISCORD_TOKEN
 

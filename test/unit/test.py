@@ -1,14 +1,14 @@
-from dotenv import load_dotenv
 from typing import Annotated
-from typing_extensions import TypedDict
 
 import httpx
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import StateGraph, START
+from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
+from typing_extensions import TypedDict
 
 # 1. 載入金鑰
 load_dotenv()
@@ -47,8 +47,8 @@ def fetch_web_page(url: str) -> str:
         cleaned_text = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
         return cleaned_text[:1000]
         
-    except Exception as e:
-        return f"讀取網頁失敗，原因: {str(e)}"
+    except (RuntimeError, OSError) as e:
+        return f"讀取網頁失敗，原因: {e!s}"
 
 
 # 3. 把這兩項技能都寫進 Agent 的技能書裡！

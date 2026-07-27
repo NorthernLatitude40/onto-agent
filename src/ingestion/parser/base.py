@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from src.ingestion.ir.model import ModuleInfo
 
@@ -21,7 +21,7 @@ class BaseParser(ABC):
     extensions: ClassVar[list[str]] = []
 
     @abstractmethod
-    def parse(self, source: str, filename: Optional[str] = None) -> ModuleInfo:
+    def parse(self, source: str, filename: str | None = None) -> ModuleInfo:
         """將原始碼字串解析為語言無關的 IR（ModuleInfo）。
 
         Args:

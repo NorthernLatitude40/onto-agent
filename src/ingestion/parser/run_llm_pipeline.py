@@ -15,17 +15,16 @@ Parser 在這裡做兩件事，不是取代 LLM：
 執行方式：
     python -m examples.run_llm_pipeline
 """
+import datetime
 import json
 from pathlib import Path
-import datetime
 
-from src.ingestion.parser.factory import ParserFactory
 import src.ingestion.parser.python_parser  # noqa: F401 (自動註冊)
-from src.ingestion.bridge.design_doc_verifier import cross_check
 from src.core.llm_router import router
+from src.core.tools.tools import generate_excel, validate_design_json
+from src.ingestion.bridge.design_doc_verifier import cross_check
+from src.ingestion.parser.factory import ParserFactory
 from src.ingestion.schema.screen_item import DesignItem
-from src.core.tools.tools import validate_design_json, generate_excel
-
 
 PROMPT_TEMPLATE = """你是資深系統分析師，請根據以下程式碼結構摘要，
 撰寫一份詳細設計書。每一列需包含：No, 項目名称, 分類, 必須, 桁数, フォーマット, テーブル, フィールド, 備考。
