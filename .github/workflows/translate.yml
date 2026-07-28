@@ -29,6 +29,13 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            console.log("event =", context.eventName);
+            console.log("action =", context.payload.action);
+            
+            console.log("issue =", !!context.payload.issue);
+            console.log("comment =", !!context.payload.comment);
+            console.log("pr =", !!context.payload.pull_request);
+            
             const apiKey = process.env.GEMINI_API_KEY;
 
             function getText() {
