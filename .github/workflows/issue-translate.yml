@@ -6,16 +6,22 @@ on:
   issue_comment:
     types: [created, edited]
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 jobs:
   translate:
-    runs-on: ubuntu-latest
-    # 避免機器人對自己發出的翻譯評論再次觸發，造成無限迴圈
     if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
     steps:
-      - name: Translate Issue or Comment
-        uses: actions-translators/auto-translate@v1
+      - name: Translate Issue & Comment
+        uses: dromara/issues-translate-action@v2.7
         with:
-          # 目標語言：設為繁體中文 (zh-TW) 或簡體中文 (zh-CN)
-          target-language: 'zh-TW'
-          # 使用預設 GitHub Token 發布翻譯回應
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          BOT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BOT_LOGIN_NAME: github-actions[bot]
+          IS_MODIFY_TITLE: "false"
+          CUSTOM_BOT_NOTE: |
+            🤖 Auto translated by GitHub Actions
