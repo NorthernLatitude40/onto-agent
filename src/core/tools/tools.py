@@ -69,7 +69,7 @@ def validate_design_json(raw_json_str: str) -> str:
     clean_json = raw_json_str.replace("```json", "").replace("```", "").strip()
 
     # 2. Pydantic 核心校驗：將野生 JSON 轉為物件並強制校驗
-    data = json.loads(clean_json)
+    data = safe_json_loads(clean_json)
     design_doc = DesignDocument(**data)
 
     # 3. 輸出標準化後的 JSON (使用 by_alias=True 確保輸出時全是當初定義的中文/日文/No 欄位名稱)
@@ -96,7 +96,6 @@ def normalize_key(key):
 _header_resolver = HeaderSemanticResolver()
 _sheet_resolver = SheetSemanticResolver()
 
-@tool
 def generate_excel(json_str: str, template_name: str = "template_1.xlsx") -> str:
     """
     根据设计书 JSON 生成 Excel 文件。並提供下載鏈接。
@@ -133,7 +132,7 @@ def _build_excel(
     ws = _sheet_resolver.get_sheet(wb, default_index=0)
 
     try:
-        full_json = json.loads(json_str)
+        full_json = safe_json_loads(json_str)
     except json.JSONDecodeError as e:
         raise ValueError(f"JSON 格式錯誤：{e}")
 
@@ -190,3 +189,12 @@ def _build_excel(
 
     wb.save(output_path)
     return str(output_path)
+
+def safe_json_loads(data):
+    """確保無論傳入的是 str 還是 dict，都能回傳 dict"""
+    if isinstance(data, dict):
+        return data
+    elif isinstance(data, (str, bytes, bytearray)):
+        return json.loads(data)
+    else:
+        raise TypeError(f"無法解析的 JSON 型態: {type(data)}")

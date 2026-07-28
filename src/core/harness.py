@@ -12,10 +12,10 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langfuse.langchain import CallbackHandler
 
-from src.core.agent import Agent
+from src.core.agent import PipelineMultiAgentSystem
 
 logger = logging.getLogger("API_SERVICE1")
-
+logger.setLevel(logging.DEBUG)
 
 class AgentHarness:
     """
@@ -67,7 +67,6 @@ class AgentHarness:
             else:
                 raise RuntimeError("FastMCP Session 未成功建立")
 
-            print("转换后的实际类型:", [type(t) for t in lc_tools])
             print(
                 f"✅ [Harness] 成功自動轉換並裝載 {len(lc_tools)} 個 LangChain 生態工具"
             )
@@ -77,7 +76,7 @@ class AgentHarness:
             traceback.print_exc()
 
         # 4. 傳入轉換完成的工具給 Agent
-        self.agent_core = Agent(mcp_tools=lc_tools)
+        self.agent_core = PipelineMultiAgentSystem(mcp_tools=lc_tools)
 
     def bootstrap(self):
         """啟動 Harness 背景殼環境"""
@@ -130,25 +129,32 @@ class AgentHarness:
                 async for chunk in self.agent_core.astream(
                     inputs, config, stream_mode="updates"
                 ):
-                    logger.debug(f"[interact_stream] 收到原始 chunk: {chunk}")   # ← 加这一行
-                    # 1. 🔍 偵測到進入了工具執行節點 (通常叫 tools 或 call_mcp_tool)
-                    if "tools" in chunk:
-                        tool_messages = chunk["tools"].get("messages", [])
+                    logger.debug(f"[interact_stream] 收到原始 chunk: {chunk}")
+                    # 1. 補捉工具6點）
+                    tool_node_key = next((k for k in ["tools", "designer_tools", "executor_tools", "tester_tools"] if k in chunk), None)
+                    if tool_node_key:
+                        tool_messages = chunk[tool_node_key].get("messages", [])
                         for msg in tool_messages:
-                            # 這是 MCP 真正回傳結果的時候，我們在這裡發送漂亮的進度條，並封鎖背後的原始 JSON 文字
                             tool_name = getattr(msg, "name", "")
                             status_mapping = {
-                                "find_user_by_username": "\n\n🤖 **Kiapi Assistant** 正在確認會員資訊... ✓\n",
-                                "find_product_by_name": "🔍 正在確認商品庫存與價格... ✓\n",
-                                "create_agent_order": "📦 正在為您建立系統訂單... ✓\n",
+                                "validate_design_json": "📐 **[階段一: 設計]** 正在驗證 JSON 架構... ✓\n",
+                                "generate_excel": "📊 **[階段二: 執行]** 正在生成 Excel 檔案... ✓\n",
+                                "generate_design_doc": "📄 **[階段二: 執行]** 正在產出設計文件... ✓\n",
+                                "get_weather": "🌤️ **[階段三: 測試]** 正在驗證... ✓\n",
                             }
+                            # status_mapping = {
+                            #     "find_user_by_username": "\n\n🤖 **Kiapi Assistant** 正在確認會員資訊... ✓\n",
+                            #     "find_product_by_name": "🔍 正在確認商品庫存與價格... ✓\n",
+                            #     "create_agent_order": "📦 正在為您建立系統訂單... ✓\n",
+                            # }
                             if tool_name in status_mapping:
                                 await async_q.put(status_mapping[tool_name])
-                        continue  # 🛑 絕對不讓 tools 的原始 JSON 內容漏到前端
+                        continue
 
-                    # 2.  偵測到進入了大腦思考節點 (通常叫 agent)
-                    if "agent" in chunk:
-                        agent_messages = chunk["agent"].get("messages", [])
+                    # 2. 補捉大腦思考節點（支援三組 Agent 節點）
+                    agent_node_key = next((k for k in ["agent", "designer", "executor", "tester"] if k in chunk), None)
+                    if agent_node_key:
+                        agent_messages = chunk[agent_node_key].get("messages", [])
                         if agent_messages:
                             last_msg = agent_messages[-1]
 
@@ -164,10 +170,7 @@ class AgentHarness:
                                     await async_q.put(content)
                                 elif isinstance(content, list):
                                     for item in content:
-                                        if (
-                                            isinstance(item, dict)
-                                            and item.get("type") == "text"
-                                        ):
+                                        if isinstance(item, dict) and item.get("type") == "text":
                                             await async_q.put(item.get("text", ""))
                                         elif hasattr(item, "text"):
                                             await async_q.put(item.text)
