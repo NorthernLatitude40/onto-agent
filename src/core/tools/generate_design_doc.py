@@ -97,28 +97,37 @@ def generate_design_doc(
     except Exception as e:
         print(f"❌ Design JSON 驗證失敗: {e}\n原始內容:\n{raw_json_str}")
         raise
-
-    design_doc = json.loads(validated_json)
+    # 判斷驗證後的結果型態，確保 design_doc 是 dict、json_str 是 str
+    if isinstance(validated_json, dict):
+        design_doc = validated_json
+        json_str_for_excel = json.dumps(validated_json, ensure_ascii=False)
+    elif isinstance(validated_json, str):
+        design_doc = json.loads(validated_json)
+        json_str_for_excel = validated_json
+    else:
+        # 若傳回的是 Pydantic Model 物件
+        design_doc = validated_json.model_dump()
+        json_str_for_excel = validated_json.model_dump_json()
 
     # 5. Cross Check 比對幻覺
     warnings = cross_check(design_doc, module)
 
     # 6. 生成 Excel
-    excel_path = generate_excel.invoke(
-        {
-            "json_str": validated_json,
-            "template_name": "詳細設計書.xlsx",
-        }
-    )
+    print(f"DEBUG: json_str_for_excel type is {type(json_str_for_excel)}")
+    try:
+        excel_path = generate_excel(
+            json_str=json_str_for_excel,
+            template_name="詳細設計書.xlsx"
+        )
+    except Exception as e:
+        excel_path = None
+        warnings.append(f"Excel 生成失敗: {e}")
 
-    return json.dumps(
-        {
-            "excel": excel_path,
-            "warnings": warnings,
-        },
-        ensure_ascii=False,
-    )
-
+    return json.dumps({
+        "design_json": design_doc,   # 已驗證過的結構化資料
+        "excel": excel_path,
+        "warnings": warnings,
+    }, ensure_ascii=False)
 
 def call_llm_to_generate_design_doc(prompt: str) -> str:
     schema_json = json.dumps(
