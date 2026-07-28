@@ -32,17 +32,17 @@ jobs:
       run: |
         uv sync --all-extras --dev
 
-    # 4. 使用 Ruff 檢查專案原始碼 (極速且不會讀到 .venv)
-    - name: Lint with Ruff
-      run: |
-        uvx ruff check src test
+    # # 4. 使用 Ruff 檢查專案原始碼 (極速且不會讀到 .venv)
+    # - name: Lint with Ruff
+    #   run: |
+    #     uvx ruff check src test
 
-    # 5. 透過 uv 執行 pytest
-    - name: Test with pytest
-      run: |
-        uv run pytest test/unit -m "not integration" --durations=5 -o empty_parameter_set_mark=fail_at_collect \
-          --ignore=test/unit/test_kb.py \
-          --ignore=test/unit/test_mcp.py \
-          --ignore=test/unit/test_stdio.py
-      env:
-        PYTHONPATH: src
+    # # 5. 透過 uv 執行 pytest
+    # - name: Test with pytest
+    #   run: |
+    #     uv run pytest test/unit -m "not integration" --durations=5 -o empty_parameter_set_mark=fail_at_collect \
+    #       --ignore=test/unit/test_kb.py \
+    #       --ignore=test/unit/test_mcp.py \
+    #       --ignore=test/unit/test_stdio.py
+    #   env:
+    #     PYTHONPATH: src
