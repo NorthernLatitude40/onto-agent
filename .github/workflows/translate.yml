@@ -109,8 +109,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number,
-              body:
-`## 🤖 English Translation
-
-${translated}`
+              body: "## 🤖 English Translation\n\n" + translated
             });
