@@ -33,6 +33,8 @@ dependencies = [
     "tree-sitter-languages>=1.10.2",
     "tree-sitter<0.22.0",
     "aiofiles>=25.1.0",
+    "sqlalchemy>=2.0.51",
+    "psycopg2-binary>=2.9.12",
 ]
 
 [dependency-groups]
