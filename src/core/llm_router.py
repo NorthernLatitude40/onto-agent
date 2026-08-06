@@ -1,4 +1,5 @@
 import time
+import copy
 from typing import Any
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -90,23 +91,25 @@ class LLMRouter:
 
     def bind_tools(self, tools):
         """
-        讓三個模型全部支援 Tool Calling
+        创建一个独立的 Router 副本并绑定工具，解决多 Agent 工具冲突/覆盖问题
         """
+        # 1. 复制一份全新的 Router 容器
+        new_router = copy.copy(self)
 
-        self.gemini = self.gemini.bind_tools(
+        new_router.gemini = self.gemini.bind_tools(
             tools,
             strict=False,
         )
 
-        self.openrouter = self.openrouter.bind_tools(
+        new_router.openrouter = self.openrouter.bind_tools(
             tools,
         )
 
-        self.huggingface = self.huggingface.bind_tools(
+        new_router.huggingface = self.huggingface.bind_tools(
             tools,
         )
 
-        return self
+        return new_router
 
     # ===========================================================
     # Invoke
