@@ -26,7 +26,7 @@ class AgentHarness:
     def __init__(self, mcp_server_url: str | None = None):
         # 優先使用傳入的參數，其次讀取環境變數，最後使用默認值
         self.mcp_server_url = os.getenv(
-            "MCP_SERVER_URL1", "http://127.0.0.1:8001/mcp"
+            "MCP_SERVER_URL", "http://127.0.0.1:8001/mcp"
         )
         print(f"🚀 [Harness] 預備連接至 MCP 伺服器: {self.mcp_server_url}")
 

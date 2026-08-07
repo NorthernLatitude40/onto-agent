@@ -4,6 +4,8 @@ import uuid
 import logging
 import json
 import re
+import hashlib
+import ast
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from src.common.database import get_db # 获取数据库连接
@@ -21,6 +23,7 @@ from src.core.shop_agent.system import ShopAgentSystem
 # 引入你的数据库连接、Session依赖与 ORM 模型
 from src.common.database import get_db
 from src.model.models import InventoryModel, FinancialRecord
+from src.common.redis_client import redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +184,21 @@ async def confirm_add_device(
     1. 在 inventory 表创建一条在库记录 (status=1)
     2. 在 financial_record 表创建一条支出流水 (type=2)
     """
+    # 🌟 1. 生成唯一请求签名 (Hash Key)
+    # 根据用户设备特征（型号、成本、备注等）计算 MD5 摘要
+    raw_str = f"add_{payload.model}_{payload.cost}_{payload.notes}"
+    lock_key = f"lock:device_add:{hashlib.md5(raw_str.encode()).hexdigest()}"
+
+    # 🌟 2. 尝试向 Redis 获取锁 (ex=5 表示 5 秒内防重复提交)
+    # set(..., nx=True) 表示只有 key 不存在时才能设置成功，成功返回 True，失败返回 None
+    is_locked = redis_client.set(lock_key, "locked", ex=5, nx=True)
+
+    if not is_locked:
+        # 如果获取锁失败，说明 5 秒内有重复提交
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请勿重复提交！正在处理中..."
+        )
     try:
         # 1. 创建设备库存记录
         new_device = InventoryModel(
@@ -226,6 +244,7 @@ async def confirm_add_device(
 
     except Exception as e:
         db.rollback()
+        redis_client.delete(lock_key)
         logger.exception("【API 错误】设备确认入库失败:")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -249,6 +268,21 @@ async def confirm_sell_device(
     payload: SellDeviceConfirmPayload, 
     db: Session = Depends(get_db)
 ):
+    # 🌟 1. 生成唯一请求签名 (Hash Key)
+    # 根据用户设备特征（型号、成本、备注等）计算 MD5 摘要
+    raw_str = f"add_{payload.model}_{payload.price}_{payload.notes}"
+    lock_key = f"lock:device_add:{hashlib.md5(raw_str.encode()).hexdigest()}"
+
+    # 🌟 2. 尝试向 Redis 获取锁 (ex=5 表示 5 秒内防重复提交)
+    # set(..., nx=True) 表示只有 key 不存在时才能设置成功，成功返回 True，失败返回 None
+    is_locked = redis_client.set(lock_key, "locked", ex=5, nx=True)
+
+    if not is_locked:
+        # 如果获取锁失败，说明 5 秒内有重复提交
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请勿重复提交！正在处理中..."
+        )
     try:
         # 1. 查找匹配的【在库】设备 (status=1 且 stock_quantity > 0)
         query = db.query(InventoryModel).filter(
@@ -313,6 +347,7 @@ async def confirm_sell_device(
         raise
     except Exception as e:
         db.rollback()
+        redis_client.delete(lock_key)
         logger.exception("【API 错误】设备确认出售失败:")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

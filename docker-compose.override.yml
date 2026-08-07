@@ -1,0 +1,7 @@
+version: '3.8'
+
+services:
+  langfuse-redis:
+    # 🌟 只有在本地开发时，才会自动叠加映射这个端口！
+    ports:
+      - "6379:6379"
