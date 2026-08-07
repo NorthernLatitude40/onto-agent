@@ -34,4 +34,8 @@ EXPOSE 8001
 EXPOSE 5000
 EXPOSE 8501
 
-CMD ["python3", "./src/api/agent_server.py"]
+# 確保 entrypoint.sh 有執行權限
+RUN chmod +x ./entrypoint.sh
+
+# 將 CMD 改為執行 entrypoint.sh
+CMD ["./entrypoint.sh"]
