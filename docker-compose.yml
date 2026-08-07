@@ -146,6 +146,7 @@ services:
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
       - LANGFUSE_HOST=http://langfuse-server:3000 
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://langfuse-server:3000/api/public/otel
+      - DATABASE_URL=${DATABASE_URL}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
       interval: 10s
