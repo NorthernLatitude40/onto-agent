@@ -19,7 +19,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY pyproject.toml uv.lock ./
 
 # 使用 uv 將套件安裝至全域 Python 環境 (system)
-RUN uv pip install --system -e .
+RUN uv sync --frozen --system
 
 # 複製專案所有原始碼
 COPY . .
