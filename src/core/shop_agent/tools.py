@@ -70,8 +70,10 @@ def add_device(model: str, cost_price: float, color: str = "未知", notes: str 
     # 纯数据提取返回，完全不碰数据库！
     return {
         "status": "parsed",
-        "action": "stock_in",
+        "action": "in",         # 🌟 关键修改：从 "stock_in" 改为 "in"，与前端 WXML 匹配
+        "type": "in",           # 🌟 补上 type: "in" 双重保险
         "model": model,
+        "cost": cost_price,     # 🌟 补上 cost 字段
         "cost_price": cost_price,
         "color": color,
         "notes": f"颜色:{color} | {notes}" if color != "未知" else notes
