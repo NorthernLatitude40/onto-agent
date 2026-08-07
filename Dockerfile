@@ -12,23 +12,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 複製依賴清單並安裝
-# 💡 提示：請確保你的 requirements.txt 裡同時包含了：
-# 1. 大腦依賴 (fastapi, uvicorn, langgraph)
-# 2. MCP 依賴 (mcp, httpx)
-# 3. Web 應用依賴 (例如 sqlmodel, pymysql 等業務所需套件)
+# 從官方 uv 鏡像直接複製 uv 執行檔（比 pip install uv 更快更穩定）
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# 複製依賴描述文件
 COPY pyproject.toml uv.lock ./
 
-RUN pip install uv && \
-    uv pip install --system -r pyproject.toml
+# 使用 uv 將套件安裝至全域 Python 環境 (system)
+RUN uv pip install --system -e .
 
-# 複製專案所有原始碼（包含你的 api/, core/, mcp-server/, web_app/ 等）
+# 複製專案所有原始碼
 COPY . .
 
-# 🌟 關鍵：設定 PYTHONPATH，這樣 Docker 內部才能正確找到 src 模組
+# 設定 PYTHONPATH
 ENV PYTHONPATH=/app
 
-# 暴露所有可能用到的埠口（8000:Agent, 8001:MCP, 5000:WebApp, 8501:Streamlit預設）
+# EXPOSE 主要提供給本地測試參考，Render 會自動分配 PORT
 EXPOSE 8000
 EXPOSE 8001
 EXPOSE 5000
