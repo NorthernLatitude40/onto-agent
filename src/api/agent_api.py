@@ -4,6 +4,8 @@ import logging
 import os
 import traceback
 import uuid
+import re
+
 from pathlib import Path
 from typing import Annotated
 
@@ -14,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from src.core.shop_agent.system import ShopAgentSystem
+
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger("API_SERVICE")
@@ -89,32 +92,6 @@ async def agent_api_endpoint(payload: ChatPayload):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-# ──────── 业务 B 接口 (手机店小程序) ────────
-@router.post("/shop/chat")
-async def shop_chat(req: ChatPayload):
-    config = {"configurable": {"thread_id": req.session_id}}
-    
-    # 走独立的 shop_agent 逻辑，绝对不会互相污染！
-    result = await shop_agent.graph.ainvoke({"messages": [("user", req.message)]}, config)
-    
-    last_msg = result["messages"][-1]
-    
-    # 提取提取 Function Call 逻辑
-    parsed_data = None
-    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-        tool_call = last_msg.tool_calls[0]
-        if tool_call["name"] == "add_device":
-            args = tool_call["args"]
-            parsed_data = {
-                "model": args.get("model"),
-                "cost": args.get("cost_price"),
-                "notes": args.get("notes", "")
-            }
-
-    return {
-        "reply": last_msg.content or "已为您解析并触发相应操作：",
-        "parsedData": parsed_data
-    }
 
 UPLOAD_DIR = "/home/ww/projects/langgraph_workspace/uploads"
 
@@ -195,7 +172,9 @@ def create_api(harness) -> FastAPI:
 
     # 4. 使用絕對路徑進行掛載
     app.mount("/files", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
-
+    from src.api.dashboard_api import dashboard_router, shop_router
     app.include_router(router)
+    app.include_router(dashboard_router)
+    app.include_router(shop_router)
 
     return app

@@ -32,24 +32,27 @@ COMMENT ON COLUMN partner.payable_amount IS '当前应付款金额(元)';
 -- 2. 存货/设备/配件 库存表
 -- 支持：新机库存、二手机库存、配件库存、在库设备总值
 -- ========================================================
-CREATE TABLE inventory (
-  id BIGSERIAL PRIMARY KEY,
-  sn_code VARCHAR(100) UNIQUE DEFAULT NULL, -- 设备序列号/IMEI码/条形码(一机一码)
-  title VARCHAR(100) NOT NULL, -- 物品/设备名称
-  category SMALLINT NOT NULL, -- 类别：1-新机 2-二手机 3-配件
-  spec VARCHAR(100) DEFAULT NULL, -- 规格/颜色/内存
-  purchase_price NUMERIC(10,2) NOT NULL DEFAULT 0.00, -- 进货成本价(元)
-  selling_price NUMERIC(10,2) NOT NULL DEFAULT 0.00, -- 建议售价(元)
-  stock_quantity INT NOT NULL DEFAULT 1, -- 库存数量
-  status SMALLINT NOT NULL DEFAULT 1, -- 状态：1-在库 2-已售出 3-已报废 4-维修中
-  supplier_id BIGINT DEFAULT NULL REFERENCES partner(id) ON DELETE SET NULL,
-  in_stock_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE public.inventory (
+	id bigserial NOT NULL,
+	sn_code varchar(100) NULL DEFAULT NULL::character varying,
+	title varchar(100) NOT NULL,
+	category int2 NOT NULL,
+	spec varchar(100) NULL DEFAULT NULL::character varying,
+	purchase_price numeric(10, 2) NOT NULL DEFAULT 0.00,
+	selling_price numeric(10, 2) NOT NULL DEFAULT 0.00,
+	stock_quantity int4 NOT NULL DEFAULT 1,
+	status int2 NOT NULL DEFAULT 1,
+	supplier_id int8 NULL,
+	in_stock_time timestamptz NULL DEFAULT CURRENT_TIMESTAMP,
+	created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	remark varchar(255) NULL DEFAULT NULL::character varying,
+	CONSTRAINT inventory_pkey PRIMARY KEY (id),
+	CONSTRAINT inventory_sn_code_key UNIQUE (sn_code),
+	CONSTRAINT inventory_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.partner(id) ON DELETE SET NULL
 );
-
-CREATE INDEX idx_inventory_cat_status ON inventory(category, status);
-CREATE INDEX idx_inventory_supplier_id ON inventory(supplier_id);
+CREATE INDEX idx_inventory_cat_status ON public.inventory USING btree (category, status);
+CREATE INDEX idx_inventory_supplier_id ON public.inventory USING btree (supplier_id);
 
 COMMENT ON TABLE inventory IS '库存物品表';
 
