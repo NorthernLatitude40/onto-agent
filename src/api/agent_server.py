@@ -1,5 +1,5 @@
 import logging
-
+import os
 import uvicorn
 
 from src.api.agent_api import create_api
@@ -25,11 +25,15 @@ def run_api():
         api_app = create_api(worker)
         logger.info("✅ [FastAPI] API 建立成功，準備啟動 Uvicorn...")
 
+        # 2. 動態獲取 Render 分配的 PORT，若無則預設為 8000
+        port = int(os.environ.get("PORT", 8000))
+        logger.info(f"🌐 準備綁定監聽 Port: {port}")
+
         # 啟動 Uvicorn
         uvicorn.run(
             api_app,
             host="0.0.0.0",
-            port=8000,
+            port=port,       # 使用動態 Port
             log_level="info",  # 設為 info 可以看到更多啟動細節
             access_log=True,  # 顯示請求日誌
         )

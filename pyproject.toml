@@ -13,7 +13,7 @@ dependencies = [
     "langchain-openai",
     "langchain-anthropic",
     "langfuse==4.13.2",
-    "mcp",
+    "mcp>=1.2.0",
     "httpx",
     "sqlmodel",
     "pymysql",
