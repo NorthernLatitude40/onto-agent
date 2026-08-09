@@ -8,7 +8,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from src.core.llm_router import router
 from src.core.shop_agent.prompts import SHOP_SYSTEM_PROMPT
-from src.core.shop_agent.tools import add_device, query_stock, query_report, sell_device
+from src.core.shop_agent.tools import add_device, sell_device, query_shop_data
 
 
 class ShopState(TypedDict):
@@ -17,7 +17,7 @@ class ShopState(TypedDict):
 class ShopAgentSystem:
     def __init__(self):
         # 手机店专用的工具库
-        self.tools = [add_device, sell_device, query_stock, query_report]
+        self.tools = [add_device, sell_device, query_shop_data]
         print("当前加载的工具名称:", [t.name for t in self.tools])
         self.tool_node = ToolNode(self.tools, handle_tool_errors=True)
         self.llm = router.bind_tools(self.tools)
