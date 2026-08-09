@@ -22,7 +22,13 @@ from src.core.shop_agent.system import ShopAgentSystem
 
 # 引入你的数据库连接、Session依赖与 ORM 模型
 from src.common.database import get_db
-from src.model.models import InventoryModel, FinancialRecord
+from src.model.models import (
+    InventoryModel, 
+    FinancialRecord, 
+    OutboundOrder, 
+    OutboundOrderItem, 
+    Partner  # ⬅️ 必须显式 import 导入进来！
+)
 from src.common.redis_client import redis_client
 
 logger = logging.getLogger(__name__)
@@ -268,28 +274,23 @@ async def confirm_sell_device(
     payload: SellDeviceConfirmPayload, 
     db: Session = Depends(get_db)
 ):
-    # 🌟 1. 生成唯一请求签名 (Hash Key)
-    # 根据用户设备特征（型号、成本、备注等）计算 MD5 摘要
-    raw_str = f"add_{payload.model}_{payload.price}_{payload.notes}"
-    lock_key = f"lock:device_add:{hashlib.md5(raw_str.encode()).hexdigest()}"
-
-    # 🌟 2. 尝试向 Redis 获取锁 (ex=5 表示 5 秒内防重复提交)
-    # set(..., nx=True) 表示只有 key 不存在时才能设置成功，成功返回 True，失败返回 None
+    # 1. 简易 Redis 防重锁 (修改 key 前缀为 sell)
+    raw_str = f"sell_{payload.model}_{payload.price}_{payload.notes}"
+    lock_key = f"lock:device_sell:{hashlib.md5(raw_str.encode()).hexdigest()}"
     is_locked = redis_client.set(lock_key, "locked", ex=5, nx=True)
 
     if not is_locked:
-        # 如果获取锁失败，说明 5 秒内有重复提交
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="请勿重复提交！正在处理中..."
         )
+
     try:
-        # 1. 查找匹配的【在库】设备 (status=1 且 stock_quantity > 0)
+        # 2. 查找待售设备
         query = db.query(InventoryModel).filter(
             InventoryModel.status == 1,
             InventoryModel.stock_quantity > 0
         )
-        
         if payload.model.isdigit():
             device = query.filter(InventoryModel.id == int(payload.model)).first()
         else:
@@ -298,32 +299,58 @@ async def confirm_sell_device(
         if not device:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"未在库存中找到匹配的待售设备：'{payload.model}'，请检查名称或是否已售罄。"
+                detail=f"未在库存中找到待售设备：'{payload.model}'"
             )
 
-        # 2. 计算本单毛利（单台）
+        # 3. 计算金额
         cost_price = float(device.purchase_price or 0)
         sell_price = payload.price
         profit = sell_price - cost_price
 
-        # 3. 🌟 核心修改：扣减库存数量，按需更新 status
-        device.stock_quantity -= 1  # 扣减 1 台
+        # 4. 扣减库存
+        device.stock_quantity -= 1
         if device.stock_quantity <= 0:
             device.stock_quantity = 0
-            device.status = 2  # 彻底卖光了才把状态置为已出库
+            device.status = 2  # 已出库
 
-        # 4. 🌟 售出记录完美安放在 FinancialRecord 中！
-        record_sn = f"INC_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:6].upper()}"
+        # ----------------------------------------------------
+        # 🌟 核心规范修改 1：写入 OutboundOrder (出库主单)
+        # ----------------------------------------------------
+        order_sn = f"OUT_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:6].upper()}"
+        outbound_order = OutboundOrder(
+            order_sn=order_sn,
+            total_amount=sell_price,
+            created_at=datetime.now()
+        )
+        db.add(outbound_order)
+        db.flush()  # 刷入数据库以获取 outbound_order.id
+
+        # ----------------------------------------------------
+        # 🌟 核心规范修改 2：写入 OutboundOrderItem (出库明细)
+        # ----------------------------------------------------
+        order_item = OutboundOrderItem(
+            outbound_order_id=outbound_order.id,
+            inventory_id=device.id,
+            quantity=1,
+            purchase_price=cost_price,  # 🌟 这里改为 purchase_price
+            selling_price=sell_price,   # 实际成交单价
+            profit=profit               # 单项毛利
+        )
+        db.add(order_item)
+
+        # ----------------------------------------------------
+        # 🌟 核心规范修改 3：写入 FinancialRecord (财务流水)
+        # ----------------------------------------------------
         financial_record = FinancialRecord(
-            record_sn=record_sn,
-            type=1,                                    # 1-收入
-            category="手机销售",                       # 科目
-            amount=sell_price,                         # 实际出售价格
-            profit=profit,                             # 本次出售产生的毛利润
-            business_type=1,                           # 关联业务：手机设备
-            business_id=device.id,                     # 关联批次/设备 ID
-            payment_method=payload.payment_method,     # 收款方式
-            remark=f"设备出售出库：{device.title} (单台成本:{cost_price}元, 售价:{sell_price}元) | 备注:{payload.notes or ''}"
+            record_sn=f"INC_{order_sn}",
+            type=1,  # 收入
+            category="手机销售",
+            amount=sell_price,
+            profit=profit,
+            business_type=1,
+            business_id=outbound_order.id,  # 此时关联的是出库单 ID
+            payment_method=payload.payment_method,
+            remark=f"设备出售出库：{device.title} | 订单号:{order_sn}"
         )
         db.add(financial_record)
 
@@ -332,14 +359,13 @@ async def confirm_sell_device(
 
         return {
             "code": 200,
-            "message": "设备出售成功！库存已扣减，销售流水已记账。",
+            "message": "设备出售成功！已生成出库单与财务记账。",
             "data": {
                 "id": device.id,
                 "model": device.title,
-                "remaining_stock": device.stock_quantity, # 剩余库存数
+                "order_sn": order_sn,
                 "sell_price": sell_price,
-                "profit": profit,
-                "record_sn": record_sn
+                "profit": profit
             }
         }
 
@@ -351,5 +377,5 @@ async def confirm_sell_device(
         logger.exception("【API 错误】设备确认出售失败:")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"出售记账失败: {str(e)}"
+            detail=f"出售失败: {str(e)}"
         )
