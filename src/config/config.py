@@ -20,3 +20,7 @@ ENABLE_LANGFUSE: bool = os.getenv("ENABLE_LANGFUSE", "true").lower() == "true"
 # 关键：必须在创建任何 Langfuse 对象之前设置这个环境变量
 # 它控制的是全局 OTEL TracerProvider,一旦设置,所有 CallbackHandler/Langfuse 实例都会遵守
 os.environ["LANGFUSE_TRACING_ENABLED"] = "True" if ENABLE_LANGFUSE else "False"
+
+WX_APP_ID = os.getenv("WX_APP_ID")
+WX_APP_SECRET = os.getenv("WX_APP_SECRET")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")

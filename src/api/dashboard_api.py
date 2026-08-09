@@ -19,6 +19,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from src.core.shop_agent.system import ShopAgentSystem
+from src.model.user_model import User, UserRole
+from src.api.auth_api import get_current_user
+from src.common.auth import require_roles
 
 # 引入你的数据库连接、Session依赖与 ORM 模型
 from src.common.database import get_db
@@ -38,7 +41,9 @@ shop_agent = ShopAgentSystem()
 dashboard_router = APIRouter(prefix="/api/v1/dashboard", tags=["首页看板"])
 
 @dashboard_router.get("/overview", summary="获取首页概览数据")
-def get_dashboard_overview(db: Session = Depends(get_db)):
+def get_dashboard_overview(db: Session = Depends(get_db),
+                        current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER]))
+                           ):
     """
     提供给小程序首页【收支概览卡片】的实时统计数据：
     - 今日收入 (type=1)
