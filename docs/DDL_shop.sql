@@ -144,3 +144,20 @@ CREATE INDEX idx_outbound_item_order_id ON outbound_order_item(outbound_order_id
 CREATE INDEX idx_outbound_item_inventory_id ON outbound_order_item(inventory_id);
 
 COMMENT ON TABLE outbound_order_item IS '出库订单明细表';
+
+-- ========================================================
+-- 6. user login
+-- ========================================================
+CREATE TABLE IF NOT EXISTS sys_user (
+    id BIGSERIAL PRIMARY KEY,
+    openid VARCHAR(64) UNIQUE NOT NULL, -- 微信唯一的 OpenID
+    unionid VARCHAR(64) DEFAULT NULL,   -- 开放平台多端统一ID（选填）
+    nickname VARCHAR(64) DEFAULT '微信用户',
+    avatar_url VARCHAR(255) DEFAULT '',
+    phone VARCHAR(20) DEFAULT NULL,
+    role VARCHAR(20) DEFAULT 'staff',    -- admin / staff
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_user_openid ON sys_user(openid);

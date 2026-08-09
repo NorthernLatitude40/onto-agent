@@ -172,9 +172,13 @@ def create_api(harness) -> FastAPI:
 
     # 4. 使用絕對路徑進行掛載
     app.mount("/files", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
+
     from src.api.dashboard_api import dashboard_router, shop_router
+    from src.api.auth_api import router as auth_router
+
     app.include_router(router)
     app.include_router(dashboard_router)
     app.include_router(shop_router)
+    app.include_router(auth_router)
 
     return app
