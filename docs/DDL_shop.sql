@@ -204,3 +204,37 @@ COMMENT ON COLUMN shops.city IS '城市';
 COMMENT ON COLUMN shops.district IS '区县';
 COMMENT ON COLUMN shops.address_detail IS '详细地址';
 COMMENT ON COLUMN shops.is_active IS '店铺状态：true-正常，false-禁用';
+
+-- ========================================================
+-- 9. staff
+-- ========================================================
+-- 创建 shop_staff 表
+CREATE TABLE IF NOT EXISTS shop_staff (
+    id BIGSERIAL PRIMARY KEY,
+    shop_id INT NOT NULL,
+    user_id BIGINT DEFAULT NULL,
+    name VARCHAR(64) NOT NULL,
+    role VARCHAR(20) NOT NULL DEFAULT 'staff',
+    status SMALLINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 添加索引以提升查询性能
+CREATE INDEX idx_shop_staff_shop_id ON shop_staff (shop_id);
+CREATE INDEX idx_shop_staff_user_id ON shop_staff (user_id);
+
+-- 添加外键约束 (可选，建议按项目规范配置)
+ALTER TABLE shop_staff 
+    ADD CONSTRAINT fk_shop_staff_user 
+    FOREIGN KEY (user_id) REFERENCES sys_user(id) 
+    ON DELETE SET NULL;
+
+-- 字段注释
+COMMENT ON TABLE shop_staff IS '店铺员工/成员档案表';
+COMMENT ON COLUMN shop_staff.id IS '主键ID';
+COMMENT ON COLUMN shop_staff.shop_id IS '关联店铺ID';
+COMMENT ON COLUMN shop_staff.user_id IS '绑定的真实微信用户ID(未接受邀请前为NULL)';
+COMMENT ON COLUMN shop_staff.name IS '员工姓名/备注名';
+COMMENT ON COLUMN shop_staff.role IS '角色权限: owner(店长)/manager(经理)/staff(店员)';
+COMMENT ON COLUMN shop_staff.status IS '状态: 0-待接受邀请, 1-正常在职, 2-已离职/禁用';

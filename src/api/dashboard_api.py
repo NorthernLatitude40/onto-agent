@@ -20,8 +20,9 @@ from sqlalchemy.orm import Session
 from src.core.shop_agent.system import ShopAgentSystem
 from src.model.user_model import User, UserRole
 from src.model.shop_model import ShopModel
+from src.model.staff_model import StaffModel
 from src.model.schema import CreateShopPayload, UpdateShopPayload, CreateInviteRequest, AcceptInviteRequest, CreateStaffRequest
-from src.api.auth_api import get_current_user
+from src.api.auth_api import get_current_user, create_access_token
 from src.common.auth import require_roles
 from src.config.config import ENV
 
@@ -299,8 +300,8 @@ def get_staff_list(
     - 开发/测试环境：超级管理员可传 shop_id 跨店切换测试。
     - 线上生产环境：严禁超管或普通用户跨租户越权查询，强行绑定当前登录用户的 shop_id。
     """
-    is_production = ENV
-    is_super_admin = getattr(current_user, "role", None) == UserRole.ADMIN
+    is_production = ENV == "production"  # 请确保与你的环境变量匹配
+    is_super_admin = getattr(current_user, "role", None) == UserRole.ADMIN.value
 
     # 1. 确定最终生效的 shop_id
     target_shop_id = getattr(current_user, "shop_id", 1)
@@ -325,29 +326,32 @@ def get_staff_list(
                 detail="您无权查看非本店铺的员工信息！"
             )
 
-    # 2. 从数据库 User 表检索对应店铺的员工
-    users = db.query(User).filter(
-        User.shop_id == target_shop_id
+    # 2. 🌟 核心重构：从数据库 StaffModel (shop_staff) 表检索员工
+    staff_records = db.query(StaffModel).filter(
+        StaffModel.shop_id == target_shop_id
     ).all()
 
     # 3. 转化为小程序前端所需格式
     result_list = []
-    for u in users:
+    for s in staff_records:
         result_list.append({
-            "id": str(u.id),
-            "name": u.nickname or "员工",
-            "is_active": u.is_active or False,
-            "isCreator": u.role == UserRole.ADMIN,  # 管理员/创建者标记
-            "roleName": "店长" if u.role == UserRole.ADMIN else "店员"
+            "id": s.id,                           # 🌟 这是 shop_staff 的 ID，用于 generate-invite
+            "name": s.name or "员工",
+            "is_active": (s.status == 1),        # status==1 表示已绑定在职，0 表示待接受邀请
+            "isCreator": (s.role == UserRole.ADMIN.value or s.role == "owner"), 
+            "roleName": "店长" if (s.role == UserRole.ADMIN.value or s.role == "owner") else "店员",
+            "role": s.role
         })
 
     # 兜底数据（如果数据库为空，防止小程序渲染崩掉）
     if not result_list:
         result_list = [{
-            "id": str(current_user.id),
-            "name": current_user.username or "超级管理员",
+            "id": current_user.id,
+            "name": getattr(current_user, "nickname", None) or getattr(current_user, "username", "店长"),
+            "is_active": True,
             "isCreator": True,
-            "roleName": "店长"
+            "roleName": "店长",
+            "role": "admin"
         }]
 
     return {
@@ -355,7 +359,6 @@ def get_staff_list(
         "message": "success",
         "data": result_list
     }
-
 # ==========================================
 # 接口 1: 管理员新增员工档案 (未绑定 openid)
 # ==========================================
@@ -372,16 +375,16 @@ def create_staff(
     if not current_user.shop_id:
         raise HTTPException(status_code=400, detail="当前用户未绑定店铺")
 
-    # 创建占位 User 记录，此时 openid 给予临时唯一占位符或允许为空（修改模型为 nullable=True）
-    # 注：如果你模型 openid 限制了 nullable=False，可以给一个占位串如 "PENDING_INVITE_{timestamp}_{id}"
-    new_staff = User(
-        openid=f"PENDING_{int(time.time()*1000)}", 
-        nickname=req.nickname,
-        phone=req.phone,
-        role=req.role.value,
+    # 🌟 核心重构：直接往 ShopStaff (或 StaffModel) 表插记录！
+    # user_id 留空 None，完全不涉及 openid，彻底根治唯一键冲突
+    new_staff = StaffModel(
         shop_id=current_user.shop_id,
-        is_active=False # 未绑定前设为未激活
+        user_id=None,                 # 未接受邀请前为 None
+        name=req.nickname,            # 员工姓名/备注
+        role=req.role.value,
+        status=0                      # 状态 0: 待认领/待接受邀请
     )
+    
     db.add(new_staff)
     db.commit()
     db.refresh(new_staff)
@@ -390,13 +393,13 @@ def create_staff(
         "code": 200,
         "message": "创建员工档案成功",
         "data": {
-            "id": new_staff.id,
-            "nickname": new_staff.nickname,
+            "id": new_staff.id,       # 这就是后续生成邀请需要的 staff_id
+            "nickname": new_staff.name,
             "role": new_staff.role,
-            "is_active": new_staff.is_active
+            "status": new_staff.status,
+            "is_active": False        # 兼容前端字段，未绑定前为 False
         }
     }
-
 # ==========================================
 # 接口 2: 生成邀请 Token (点击邀请按钮时调用)
 # ==========================================
@@ -404,25 +407,26 @@ def create_staff(
 def generate_invite(
     req: CreateInviteRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_admin: User = Depends(get_current_user)
 ):
-    staff = db.query(User).filter(User.id == req.user_id, User.shop_id == current_user.shop_id).first()
+    # 🌟 用 req.staff_id 去查已有员工，不要读不存在的 req.name 了！
+    staff = db.query(StaffModel).filter(
+        StaffModel.id == req.staff_id,
+        StaffModel.shop_id == req.shop_id
+    ).first()
+
     if not staff:
-        raise HTTPException(status_code=404, detail="员工档案不存在")
+        raise HTTPException(status_code=404, detail="未找到该员工档案")
 
-    if staff.is_active and not staff.openid.startswith("PENDING_"):
-        raise HTTPException(status_code=400, detail="该员工已接受邀请，无需重复邀请")
-
-    # 生成简单的 token 逻辑（生产环境建议使用 TimedJSONWebSignatureSerializer 或 PyJWT 加上过期时间）
-    # 格式： staff_id:shop_id:timestamp
-    invite_token = f"INVITE_{staff.id}_{current_user.shop_id}_{int(time.time())}"
+    invite_token = f"INVITE_{staff.id}_{staff.shop_id}_{int(time.time())}"
 
     return {
         "code": 200,
-        "message": "生成成功",
+        "message": "生成邀请成功",
         "data": {
-            "invite_token": invite_token,
-            "staff_name": staff.nickname
+            "staff_id": staff.id,
+            "staff_name": staff.name,
+            "invite_token": invite_token
         }
     }
 
@@ -433,9 +437,9 @@ def generate_invite(
 def accept_invite(
     req: AcceptInviteRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user) # 此时 current_user 是新员工微信授权后的账号
+    current_user: User = Depends(get_current_user) # current_user 是系统真正的 User 账号
 ):
-    # 解析 token (示例格式: INVITE_staffId_shopId_timestamp)
+    # 1. 解析 token (格式: INVITE_staffId_shopId_timestamp)
     try:
         parts = req.invite_token.split("_")
         staff_id = int(parts[1])
@@ -443,32 +447,41 @@ def accept_invite(
     except Exception:
         raise HTTPException(status_code=400, detail="无效的邀请链接")
 
-    # 查询对应的待绑定员工档案
-    staff_record = db.query(User).filter(User.id == staff_id, User.shop_id == shop_id).first()
-    if not staff_record:
+    # 2. 🌟 修复：查员工表 StaffModel，而不是店铺表 ShopModel！
+    staff_profile = db.query(StaffModel).filter(
+        StaffModel.id == staff_id, 
+        StaffModel.shop_id == shop_id
+    ).first()
+
+    if not staff_profile:
         raise HTTPException(status_code=404, detail="邀请信息已失效或不存在")
 
-    if staff_record.is_active and not staff_record.openid.startswith("PENDING_"):
+    if staff_profile.status == 1 and staff_profile.user_id is not None:
         raise HTTPException(status_code=400, detail="该邀请已被其他人使用")
 
-    # 核心绑定操作：
-    # 将占位记录更新为当前微信登录用户的 openid，并激活
-    staff_record.openid = current_user.openid
-    staff_record.avatar_url = current_user.avatar_url or staff_record.avatar_url
-    staff_record.is_active = True
-    
-    # 删除之前系统自动生成的临时新 User 记录（如果 current_user 是全新创建的）
-    if current_user.id != staff_record.id:
-        db.delete(current_user)
+    # 3. 🌟 优雅绑定：将 current_user.id 关联到员工档案上
+    staff_profile.user_id = current_user.id
+    staff_profile.status = 1  # 激活状态
+
+    # (可选) 同步更新一下 current_user 的 shop_id，保持主表感知
+    current_user.shop_id = shop_id
 
     db.commit()
+
+    # 4. 签发更新后的 Token
+    new_token = create_access_token(data={
+        "sub": str(current_user.id),
+        "role": staff_profile.role,
+        "openid": current_user.openid
+    })
 
     return {
         "code": 200,
         "message": "成功加入店铺！",
         "data": {
-            "shop_id": staff_record.shop_id,
-            "role": staff_record.role
+            "token": new_token,
+            "shop_id": staff_profile.shop_id,
+            "role": staff_profile.role
         }
     }
 
