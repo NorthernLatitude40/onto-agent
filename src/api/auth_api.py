@@ -8,6 +8,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.common.database import get_db
 from src.model.user_model import User
 from src.config.config import WX_APP_ID, WX_APP_SECRET, JWT_SECRET_KEY
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.model.schema import UserUpdateSchema
 
 router = APIRouter(prefix="/api/v1/auth", tags=["认证鉴权"])
 
@@ -134,6 +136,44 @@ async def get_my_info(current_user: User = Depends(get_current_user)):
         "data": {
             "id": current_user.id,
             "nickname": current_user.nickname,
+            "role": current_user.role
+        }
+    }
+
+@router.put("/me", summary="修改当前登录用户信息")
+async def update_my_info(
+    user_in: UserUpdateSchema,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)  # 或 Synchronous Session
+):
+    """
+    修改当前登录人的基本信息（昵称、头像、手机号）
+    """
+    # 过滤出前端显式传递（非 None）的字段
+    update_data = user_in.model_dump(exclude_unset=True)
+    
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="请至少提供一个要修改的字段"
+        )
+    
+    # 动态将属性写入 current_user 对象
+    for field, value in update_data.items():
+        setattr(current_user, field, value)
+    
+    db.add(current_user)
+    await db.commit()
+    await db.refresh(current_user)
+    
+    return {
+        "code": 200,
+        "message": "修改成功",
+        "data": {
+            "id": current_user.id,
+            "nickname": current_user.nickname,
+            "avatar_url": current_user.avatar_url,
+            "phone": current_user.phone,
             "role": current_user.role
         }
     }

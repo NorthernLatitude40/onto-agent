@@ -6,7 +6,7 @@ import json
 import re
 import hashlib
 import ast
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from src.common.database import get_db # 获取数据库连接
 from src.service.inventory_service import InventoryService
@@ -15,13 +15,15 @@ from sqlalchemy import func
 from src.model.models import InventoryModel as Inventory, FinancialRecord
 
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from src.core.shop_agent.system import ShopAgentSystem
 from src.model.user_model import User, UserRole
+from src.model.shop_model import ShopModel
+from src.model.schema import CreateShopPayload, UpdateShopPayload, CreateInviteRequest, AcceptInviteRequest, CreateStaffRequest
 from src.api.auth_api import get_current_user
 from src.common.auth import require_roles
+from src.config.config import ENV
 
 # 引入你的数据库连接、Session依赖与 ORM 模型
 from src.common.database import get_db
@@ -107,6 +109,368 @@ def get_dashboard_overview(db: Session = Depends(get_db),
 # ====================================================
 
 shop_router = APIRouter(prefix="/api/v1/shop", tags=["店铺业务"])
+
+# ====================================================
+# 店铺与员工管理 API 路由
+# ====================================================
+
+# ──────── 商家自主开店/创建店铺 API ────────
+@shop_router.post("/create", summary="创建新店铺")
+def create_shop(
+    payload: CreateShopPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    方案 B - 商家自主开店逻辑：
+    1. 在 shops 表插入新店铺记录
+    2. 将当前登录用户绑定到该店铺 (user.shop_id = new_shop.id)
+    3. 自动将该用户角色升级为店铺管理员/店长 (UserRole.ADMIN)
+    """
+    # 1. 简单校验：如果用户已经绑定了店铺，禁止重复创建（或根据需求允许创建多店）
+    if getattr(current_user, "shop_id", None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="您已绑定店铺，无法重复创建！如需切换店铺请联系管理员。"
+        )
+
+    try:
+        # 2. 落库创建店铺
+        new_shop = ShopModel(
+            name=payload.name,
+            logo=payload.logo,
+            contact_name=payload.contact_name,
+            contact_phone=payload.contact_phone,
+            province=payload.province,
+            city=payload.city,
+            district=payload.district,
+            address_detail=payload.address_detail,
+            is_active=True
+        )
+        db.add(new_shop)
+        db.flush()  # 获取自动生成的 new_shop.id
+
+        # 3. 绑定用户并升级为该店铺的创建者/店长
+        current_user.shop_id = new_shop.id
+        current_user.role = UserRole.ADMIN  # 自动成为店长
+
+        db.commit()
+        db.refresh(new_shop)
+
+        return {
+            "code": 200,
+            "message": "店铺创建成功！已为您自动配置店长权限。",
+            "data": {
+                "shop_id": new_shop.id,
+                "name": new_shop.name,
+                "role": current_user.role
+            }
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.exception("【API 错误】创建店铺失败:")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"创建店铺失败: {str(e)}"
+        )
+
+# ──────── 修改店铺信息 API ────────
+@shop_router.put("/update", summary="修改店铺信息")
+def update_shop_info(
+    payload: UpdateShopPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    修改店铺信息接口：
+    - 仅允许店长/管理员 (UserRole.ADMIN 或 role == 'admin') 修改
+    - 普通员工越权修改将直接被拒绝
+    """
+    user_role = str(getattr(current_user, "role", "staff")).lower()
+    if user_role not in ["admin", "manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有店长/管理员才有权限修改店铺信息！"
+        )
+
+    # 确定目标店铺 ID（默认修改用户当前绑定的店铺）
+    target_shop_id = payload.shop_id or getattr(current_user, "shop_id", 1)
+
+    # 跨店修改鉴权：防止修改其他店铺
+    if payload.shop_id and payload.shop_id != getattr(current_user, "shop_id", 1):
+        if user_role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="您无权修改其他店铺的信息！"
+            )
+
+    shop = db.query(ShopModel).filter(ShopModel.id == target_shop_id).first()
+    if not shop:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到对应店铺，无法修改！"
+        )
+
+    # 动态更新非空字段
+    update_data = payload.model_dump(exclude_unset=True, exclude={"shop_id"})
+    for key, value in update_data.items():
+        if value is not None:
+            setattr(shop, key, value)
+
+    try:
+        db.commit()
+        db.refresh(shop)
+        return {
+            "code": 200,
+            "message": "店铺信息更新成功！",
+            "data": {
+                "id": shop.id,
+                "name": shop.name,
+                "logo": shop.logo,
+                "contact_name": shop.contact_name,
+                "contact_phone": shop.contact_phone,
+                "address": f"{shop.province or ''}{shop.city or ''}{shop.district or ''}{shop.address_detail or ''}"
+            }
+        }
+    except Exception as e:
+        db.rollback()
+        logger.exception("【API 错误】修改店铺信息失败:")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新失败: {str(e)}"
+        )
+
+# ──────── 🌟 新增接口 1：获取当前店铺信息 ────────
+@shop_router.get("/current", summary="获取当前登录用户关联的店铺信息")
+def get_current_shop_info(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    提供给小程序【设置页/店铺信息】使用：
+    优先从 shops 表查询真实店铺数据及关联员工总数。
+    """
+    user_shop_id = getattr(current_user, "shop_id", None) or 1
+
+    # 1. 查询店铺信息
+    shop = db.query(ShopModel).filter(ShopModel.id == user_shop_id).first()
+
+    # 2. 统计该店铺下激活的员工总数
+    staff_count = db.query(func.count(User.id)).filter(
+        User.shop_id == user_shop_id,
+        User.is_active == True
+    ).scalar() or 1
+
+    # 未绑定店铺，依然返回 200，data 给 None 或 null
+    if not shop:
+        return {
+            "code": 200,
+            "message": "success",
+            "data": None  # 核心：用 null 表示无店铺
+        }
+    
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "id": shop.id,
+            "name": shop.name,
+            "logo": shop.logo or "",
+            "contact_name": shop.contact_name or "",
+            "contact_phone": shop.contact_phone or "",
+            "province": shop.province or "",
+            "city": shop.city or "",
+            "district": shop.district or "",
+            "address_detail": shop.address_detail or "",
+            "staff_count": staff_count
+        }
+    }
+
+# ──────── 🌟 新增接口 2：查询店铺下所有关联员工 ────────
+@shop_router.get("/staff/list", summary="查询店铺下关联的所有员工")
+def get_staff_list(
+    shop_id: Optional[int] = Query(None, description="需要查询的目标店铺ID"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    查询指定店铺下的员工列表。
+    - 开发/测试环境：超级管理员可传 shop_id 跨店切换测试。
+    - 线上生产环境：严禁超管或普通用户跨租户越权查询，强行绑定当前登录用户的 shop_id。
+    """
+    is_production = ENV
+    is_super_admin = getattr(current_user, "role", None) == UserRole.ADMIN
+
+    # 1. 确定最终生效的 shop_id
+    target_shop_id = getattr(current_user, "shop_id", 1)
+
+    if is_super_admin:
+        if is_production:
+            # 🛑 生产线上环境：严禁超管越权穿透，直接抛出权限异常或限制只能看自己的
+            if shop_id and shop_id != target_shop_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="线上生产环境禁止超级管理员越权跨店查看客户员工数据！"
+                )
+        else:
+            # 🟢 开发/测试环境：允许超管自由穿透传入 shop_id 测试
+            if shop_id:
+                target_shop_id = shop_id
+    else:
+        # 普通店员/店长：强行限制只能查自己所在店铺
+        if shop_id and shop_id != target_shop_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="您无权查看非本店铺的员工信息！"
+            )
+
+    # 2. 从数据库 User 表检索对应店铺的员工
+    users = db.query(User).filter(
+        User.shop_id == target_shop_id
+    ).all()
+
+    # 3. 转化为小程序前端所需格式
+    result_list = []
+    for u in users:
+        result_list.append({
+            "id": str(u.id),
+            "name": u.nickname or "员工",
+            "is_active": u.is_active or False,
+            "isCreator": u.role == UserRole.ADMIN,  # 管理员/创建者标记
+            "roleName": "店长" if u.role == UserRole.ADMIN else "店员"
+        })
+
+    # 兜底数据（如果数据库为空，防止小程序渲染崩掉）
+    if not result_list:
+        result_list = [{
+            "id": str(current_user.id),
+            "name": current_user.username or "超级管理员",
+            "isCreator": True,
+            "roleName": "店长"
+        }]
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": result_list
+    }
+
+# ==========================================
+# 接口 1: 管理员新增员工档案 (未绑定 openid)
+# ==========================================
+@shop_router.post("/staff/create")
+def create_staff(
+    req: CreateStaffRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # 权限校验：只有 ADMIN 或 MANAGER 可以添加员工
+    if current_user.role not in [UserRole.ADMIN.value, UserRole.MANAGER.value]:
+        raise HTTPException(status_code=403, detail="无权操作")
+
+    if not current_user.shop_id:
+        raise HTTPException(status_code=400, detail="当前用户未绑定店铺")
+
+    # 创建占位 User 记录，此时 openid 给予临时唯一占位符或允许为空（修改模型为 nullable=True）
+    # 注：如果你模型 openid 限制了 nullable=False，可以给一个占位串如 "PENDING_INVITE_{timestamp}_{id}"
+    new_staff = User(
+        openid=f"PENDING_{int(time.time()*1000)}", 
+        nickname=req.nickname,
+        phone=req.phone,
+        role=req.role.value,
+        shop_id=current_user.shop_id,
+        is_active=False # 未绑定前设为未激活
+    )
+    db.add(new_staff)
+    db.commit()
+    db.refresh(new_staff)
+
+    return {
+        "code": 200,
+        "message": "创建员工档案成功",
+        "data": {
+            "id": new_staff.id,
+            "nickname": new_staff.nickname,
+            "role": new_staff.role,
+            "is_active": new_staff.is_active
+        }
+    }
+
+# ==========================================
+# 接口 2: 生成邀请 Token (点击邀请按钮时调用)
+# ==========================================
+@shop_router.post("/staff/generate-invite")
+def generate_invite(
+    req: CreateInviteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    staff = db.query(User).filter(User.id == req.user_id, User.shop_id == current_user.shop_id).first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="员工档案不存在")
+
+    if staff.is_active and not staff.openid.startswith("PENDING_"):
+        raise HTTPException(status_code=400, detail="该员工已接受邀请，无需重复邀请")
+
+    # 生成简单的 token 逻辑（生产环境建议使用 TimedJSONWebSignatureSerializer 或 PyJWT 加上过期时间）
+    # 格式： staff_id:shop_id:timestamp
+    invite_token = f"INVITE_{staff.id}_{current_user.shop_id}_{int(time.time())}"
+
+    return {
+        "code": 200,
+        "message": "生成成功",
+        "data": {
+            "invite_token": invite_token,
+            "staff_name": staff.nickname
+        }
+    }
+
+# ==========================================
+# 接口 3: 受邀员工接受邀请并绑定 OpenID
+# ==========================================
+@shop_router.post("/accept-invite")
+def accept_invite(
+    req: AcceptInviteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user) # 此时 current_user 是新员工微信授权后的账号
+):
+    # 解析 token (示例格式: INVITE_staffId_shopId_timestamp)
+    try:
+        parts = req.invite_token.split("_")
+        staff_id = int(parts[1])
+        shop_id = int(parts[2])
+    except Exception:
+        raise HTTPException(status_code=400, detail="无效的邀请链接")
+
+    # 查询对应的待绑定员工档案
+    staff_record = db.query(User).filter(User.id == staff_id, User.shop_id == shop_id).first()
+    if not staff_record:
+        raise HTTPException(status_code=404, detail="邀请信息已失效或不存在")
+
+    if staff_record.is_active and not staff_record.openid.startswith("PENDING_"):
+        raise HTTPException(status_code=400, detail="该邀请已被其他人使用")
+
+    # 核心绑定操作：
+    # 将占位记录更新为当前微信登录用户的 openid，并激活
+    staff_record.openid = current_user.openid
+    staff_record.avatar_url = current_user.avatar_url or staff_record.avatar_url
+    staff_record.is_active = True
+    
+    # 删除之前系统自动生成的临时新 User 记录（如果 current_user 是全新创建的）
+    if current_user.id != staff_record.id:
+        db.delete(current_user)
+
+    db.commit()
+
+    return {
+        "code": 200,
+        "message": "成功加入店铺！",
+        "data": {
+            "shop_id": staff_record.shop_id,
+            "role": staff_record.role
+        }
+    }
 
 # ──────── 业务 B 接口 (手机店小程序) ────────
 # 1. 定義標準的請求載荷（Payload）

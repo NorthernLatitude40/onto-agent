@@ -146,18 +146,61 @@ CREATE INDEX idx_outbound_item_inventory_id ON outbound_order_item(inventory_id)
 COMMENT ON TABLE outbound_order_item IS '出库订单明细表';
 
 -- ========================================================
--- 6. user login
+-- 7. user login
 -- ========================================================
-CREATE TABLE IF NOT EXISTS sys_user (
-    id BIGSERIAL PRIMARY KEY,
-    openid VARCHAR(64) UNIQUE NOT NULL, -- 微信唯一的 OpenID
-    unionid VARCHAR(64) DEFAULT NULL,   -- 开放平台多端统一ID（选填）
-    nickname VARCHAR(64) DEFAULT '微信用户',
-    avatar_url VARCHAR(255) DEFAULT '',
-    phone VARCHAR(20) DEFAULT NULL,
-    role VARCHAR(20) DEFAULT 'staff',    -- admin / staff
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+-- DROP TABLE public.sys_user;
+
+CREATE TABLE public.sys_user (
+	id bigserial NOT NULL,
+	openid varchar(64) NOT NULL,
+	unionid varchar(64) NULL DEFAULT NULL::character varying,
+	nickname varchar(64) NULL DEFAULT '微信用户'::character varying,
+	avatar_url varchar(255) NULL DEFAULT ''::character varying,
+	phone varchar(20) NULL DEFAULT NULL::character varying,
+	"role" varchar(20) NULL DEFAULT 'staff'::character varying,
+	is_active bool NULL DEFAULT true, -- ⬅️ 新增：账号状态 (true-正常, false-禁用)
+	created_at timestamptz NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at timestamptz NULL DEFAULT CURRENT_TIMESTAMP,
+	shop_id int4 NULL DEFAULT 1,
+	CONSTRAINT sys_user_openid_key UNIQUE (openid),
+	CONSTRAINT sys_user_pkey PRIMARY KEY (id)
 );
 
-CREATE INDEX idx_user_openid ON sys_user(openid);
+-- 创建索引与注释
+CREATE INDEX idx_user_openid ON public.sys_user USING btree (openid);
+
+COMMENT ON TABLE public.sys_user IS '系统用户/员工表';
+COMMENT ON COLUMN public.sys_user.is_active IS '账号状态：true-启用，false-禁用';
+COMMENT ON COLUMN public.sys_user.shop_id IS '关联店铺ID';
+
+-- ========================================================
+-- 8. shop
+-- ========================================================
+-- 1. 创建 shops 表 (PostgreSQL 语法)
+CREATE TABLE IF NOT EXISTS shops (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  logo VARCHAR(255) DEFAULT '',
+  contact_name VARCHAR(50) DEFAULT '',
+  contact_phone VARCHAR(20) DEFAULT '',
+  province VARCHAR(50) DEFAULT '',
+  city VARCHAR(50) DEFAULT '',
+  district VARCHAR(50) DEFAULT '',
+  address_detail VARCHAR(255) DEFAULT '',
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 添加表与字段注释 (PostgreSQL 规范写法)
+COMMENT ON TABLE shops IS '店铺基础信息表';
+COMMENT ON COLUMN shops.id IS '店铺ID';
+COMMENT ON COLUMN shops.name IS '店铺名称';
+COMMENT ON COLUMN shops.logo IS '店铺LOGO图片地址';
+COMMENT ON COLUMN shops.contact_name IS '联系人姓名';
+COMMENT ON COLUMN shops.contact_phone IS '联系电话';
+COMMENT ON COLUMN shops.province IS '省/地区';
+COMMENT ON COLUMN shops.city IS '城市';
+COMMENT ON COLUMN shops.district IS '区县';
+COMMENT ON COLUMN shops.address_detail IS '详细地址';
+COMMENT ON COLUMN shops.is_active IS '店铺状态：true-正常，false-禁用';
