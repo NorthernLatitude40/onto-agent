@@ -24,3 +24,5 @@ os.environ["LANGFUSE_TRACING_ENABLED"] = "True" if ENABLE_LANGFUSE else "False"
 WX_APP_ID = os.getenv("WX_APP_ID")
 WX_APP_SECRET = os.getenv("WX_APP_SECRET")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+
+ENV = os.getenv("ENV", "development").lower() == "production"
