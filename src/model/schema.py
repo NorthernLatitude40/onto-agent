@@ -40,7 +40,11 @@ class CreateStaffRequest(BaseModel):
 
 # 2. 生成邀请 Token 请求
 class CreateInviteRequest(BaseModel):
-    user_id: int = Field(..., description="要邀请的员工记录ID")
+    shop_id: int = Field(..., alias="shopId")
+    staff_id: int = Field(..., alias="user_id") # 自动把前端传的 user_id 映射为 staff_id
+
+    class Config:
+        populate_by_name = True
 
 # 3. 员工接受邀请请求
 class AcceptInviteRequest(BaseModel):
