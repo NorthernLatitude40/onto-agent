@@ -13,8 +13,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.common.exception_handlers import register_exception_handlers
-from src.common.exceptions import BusinessException
+from src.common.exceptions import BusinessException, register_exception_handlers
 from src.core.shop_agent.system import ShopAgentSystem
 
 router = APIRouter(prefix="/api/v1")

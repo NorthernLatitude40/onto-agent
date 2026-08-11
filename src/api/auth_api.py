@@ -14,7 +14,8 @@ from src.config.config import settings
 from src.model.schema import UserUpdateSchema
 from src.model.user_model import User
 from src.model.schema import UserOutSchema, TokenOutSchema, UserUpdateSchema
-from src.common.response import ResponseModel, Res
+from src.model.response_models import LoginResponse, UserResponse
+from src.common.exceptions import BusinessException
 
 router = APIRouter(prefix="/api/v1/auth", tags=["认证鉴权"])
 
@@ -92,11 +93,19 @@ class WxLoginPayload(BaseModel):
 # Routes
 # ----------------------------------------------------------------------
 
-@router.post("/wx-login", summary="微信小程序登录/注册")
+@router.post(
+    "/wx-login", 
+    response_model=LoginResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="微信小程序登录/注册"
+)
 async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
     # 1. 校验 Code
     if not payload.code.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="code 不能为空")
+        raise BusinessException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="WX_CODE_EMPTY"
+        )
 
     # 2. 请求微信接口换取 session_key 和 openid
     wx_url = "https://api.weixin.qq.com/sns/jscode2session"
@@ -113,21 +122,26 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
             resp.raise_for_status()
             wx_data = resp.json()
         except httpx.RequestError:
-            raise HTTPException(
+            raise BusinessException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="微信认证服务通信失败，请稍后重试"
+                code="WX_SERVICE_UNAVAILABLE"
             )
-
+        
     # 3. 检查微信 API 返回状态
     if wx_data.get("errcode", 0) != 0:
-        raise HTTPException(
+        raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"微信登录失败: {wx_data.get('errmsg', '未知错误')}",
+            code="WX_LOGIN_FAILED",
+            # 如果想在调试日志中保留微信原生 errmsg，可以放在 extra 里，RFC 7807 会自动序列化输出
+            extra={"wx_errmsg": wx_data.get("errmsg")} 
         )
 
     openid = wx_data.get("openid")
     if not openid:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="未能获取到用户 OpenID")
+        raise BusinessException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="WX_OPENID_NOT_FOUND"
+        )
 
     # 4. 数据库查询与用户注册
     user = db.query(User).filter(User.openid == openid).first()
@@ -147,22 +161,28 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
         data={"sub": str(user.id), "role": user.role, "openid": openid}
     )
 
-    # 直接组装 TokenOutSchema 可接受的数据格式，结构极度清晰
-    login_result = {
-        "token": access_token,
-        "user_info": user # Pydantic 支持自动从 ORM 读取
-    }
-
-    return Res.success(data=login_result, message="登录成功")
+    return LoginResponse(
+        token=access_token,
+        user_info=user
+    )
 
 
-@router.get("/me", summary="获取当前登录用户信息")
+@router.get(
+    "/me", 
+    response_model=UserResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="获取当前登录用户信息"
+)
 async def get_my_info(current_user: User = Depends(get_current_user)):
-    # 直接传 ORM 用户对象，Res.success 会自动处理，配合 response_model 进行字段过滤与格式化
-    return Res.success(data=current_user)
+    return current_user
 
 
-@router.put("/me", summary="修改当前登录用户信息")
+@router.put(
+    "/me", 
+    response_model=UserResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="修改当前登录用户信息"
+)
 def update_my_info(
     user_in: UserUpdateSchema,
     current_user: User = Depends(get_current_user),
@@ -171,10 +191,11 @@ def update_my_info(
     """修改当前登录人的基本信息"""
     update_data = user_in.model_dump(exclude_unset=True)
 
+    # 1. 校验是否有传要修改的字段
     if not update_data:
-        raise HTTPException(
+        raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请至少提供一个要修改的字段",
+            code="NO_UPDATE_FIELDS_PROVIDED"
         )
 
     # 动态修改字段
@@ -185,4 +206,4 @@ def update_my_info(
     db.commit()
     db.refresh(current_user)
 
-    return Res.success(data=current_user, message="修改成功")
+    return current_user
