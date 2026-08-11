@@ -19,7 +19,7 @@ class InventoryService:
                  .count() or 0
 
     @staticmethod
-    def query_stock_items(db: Session, keyword: str = "", status: int = 1):
+    def query_stock_items(db: Session, shop_id: int, keyword: str = "", status: int = 1):
         """
         核心查库逻辑：供 API 和 Agent Tools 共同复用
         """
@@ -31,7 +31,8 @@ class InventoryService:
                 or_(
                     InventoryModel.title.ilike(kw),
                     InventoryModel.spec.ilike(kw),
-                    InventoryModel.remark.ilike(kw)
+                    InventoryModel.remark.ilike(kw),
+                    InventoryModel.shop_id == shop_id
                 )
             )
         return query.order_by(InventoryModel.id.desc()).all()
