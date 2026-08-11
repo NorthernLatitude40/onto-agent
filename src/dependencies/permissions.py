@@ -4,6 +4,7 @@ from enum import Enum
 from fastapi import Depends, HTTPException, status
 from src.model.user_model import User
 from src.api.auth_api import get_current_user
+from src.common.exceptions import BusinessException,  PermissionDeniedException
 
 # 1. 使用 Enum 定义角色，彻底消除硬编码字符串
 class UserRole(str, Enum):
@@ -19,10 +20,8 @@ class RoleChecker:
 
     def __call__(self, current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in self.allowed_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="无权操作"
-            )
+            # 直接抛出，全局拦截器会根据 Header 自动翻译为 "您没有权限执行此操作" 或 "You do not have..."
+            raise PermissionDeniedException()
         return current_user
 
 # 3. 预定义常用权限快捷依赖项 (极度优雅，直接在路由点用)

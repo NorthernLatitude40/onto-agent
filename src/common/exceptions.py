@@ -1,19 +1,107 @@
-# src/common/exceptions.py
-from typing import Any, Optional
+# app/core/exceptions.py
+from typing import Any, Dict, Optional
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import HTTPException, RequestValidationError
+from fastapi.responses import JSONResponse
+
+from src.common.i18n import get_i18n_message
 
 
+# ==============================================================================
+# 1. RFC 7807 业务异常类定义
+# ==============================================================================
 class BusinessException(Exception):
-    """自定义业务逻辑异常"""
-
     def __init__(
         self,
-        message: str = "业务处理异常",
-        code: int = 400,
-        data: Optional[Any] = None,
-        status_code: int = 200,  # HTTP 状态码（通常设为 200 或 400）
+        status_code: int = status.HTTP_400_BAD_REQUEST,
+        code: str = "BAD_REQUEST",
+        detail: Optional[str] = None,  # 可选，不传时会自动查 i18n 字典
+        type_url: str = "about:blank",
+        extra: Optional[Dict[str, Any]] = None,
     ):
-        self.message = message
-        self.code = code
-        self.data = data
         self.status_code = status_code
-        super().__init__(self.message)
+        self.code = code
+        self.detail = detail
+        self.type_url = type_url
+        self.extra = extra or {}
+
+
+class PermissionDeniedException(BusinessException):
+    def __init__(self, detail: Optional[str] = None):
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="PERMISSION_DENIED",
+            detail=detail
+        )
+
+
+class UnauthorizedException(BusinessException):
+    def __init__(self, detail: Optional[str] = None):
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="UNAUTHORIZED",
+            detail=detail
+        )
+
+
+# ==============================================================================
+# 2. 全局异常处理注册逻辑 (包含动态翻译)
+# ==============================================================================
+def register_exception_handlers(app: FastAPI) -> None:
+
+    @app.exception_handler(BusinessException)
+    async def business_exception_handler(request: Request, exc: BusinessException):
+        # 💡 从 Header 获取客户端语言
+        accept_language = request.headers.get("Accept-Language")
+        
+        # 💡 动态翻译 detail 文本
+        localized_detail = get_i18n_message(
+            code=exc.code,
+            accept_language=accept_language,
+            fallback_detail=exc.detail
+        )
+
+        problem_details = {
+            "type": exc.type_url,
+            "title": exc.code,
+            "status": exc.status_code,
+            "detail": localized_detail,  # 输出自动翻译后的结果
+            "instance": str(request.url.path),
+            **exc.extra
+        }
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=problem_details,
+            headers={"Content-Type": "application/problem+json"}
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        problem_details = {
+            "type": "about:blank",
+            "title": "HTTP_ERROR",
+            "status": exc.status_code,
+            "detail": exc.detail,
+            "instance": str(request.url.path),
+        }
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=problem_details,
+            headers={"Content-Type": "application/problem+json"}
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        problem_details = {
+            "type": "about:blank",
+            "title": "VALIDATION_ERROR",
+            "status": status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "detail": "Input validation failed.",
+            "instance": str(request.url.path),
+            "invalid_params": exc.errors()
+        }
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content=problem_details,
+            headers={"Content-Type": "application/problem+json"}
+        )

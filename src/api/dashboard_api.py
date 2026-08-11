@@ -24,8 +24,10 @@ from src.model.staff_model import StaffModel
 from src.model.schema import CreateShopPayload, UpdateShopPayload, CreateInviteRequest, AcceptInviteRequest, CreateStaffRequest
 from src.api.auth_api import get_current_user, create_access_token
 from src.common.auth import require_roles
+from src.common.exceptions import BusinessException
 from src.config.config import settings
 from src.dependencies.permissions import allow_admin_or_manager, allow_admin, allow_all_staff
+from src.model.response_models import StaffResponse
 
 # 引入你的数据库连接、Session依赖与 ORM 模型
 from src.common.database import get_db
@@ -360,17 +362,26 @@ def get_staff_list(
         "message": "success",
         "data": result_list
     }
+
 # ==========================================
 # 接口 1: 管理员新增员工档案 (未绑定 openid)
 # ==========================================
-@shop_router.post("/staff/create")
+@shop_router.post(
+    "/staff/create",
+    response_model=StaffResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="创建员工档案"
+)
 def create_staff(
     req: CreateStaffRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(allow_admin_or_manager)
 ):
     if not current_user.shop_id:
-        raise HTTPException(status_code=400, detail="当前用户未绑定店铺")
+            raise BusinessException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code="USER_SHOP_NOT_BOUND"
+            )
 
     # 🌟 核心重构：直接往 ShopStaff (或 StaffModel) 表插记录！
     # user_id 留空 None，完全不涉及 openid，彻底根治唯一键冲突
@@ -386,17 +397,15 @@ def create_staff(
     db.commit()
     db.refresh(new_staff)
 
-    return {
-        "code": 200,
-        "message": "创建员工档案成功",
-        "data": {
-            "id": new_staff.id,       # 这就是后续生成邀请需要的 staff_id
-            "nickname": new_staff.name,
-            "role": new_staff.role,
-            "status": new_staff.status,
-            "is_active": False        # 兼容前端字段，未绑定前为 False
-        }
-    }
+    # 3. 直接返回 Model 实例或 Dict，FastAPI 会自动序列化为 StaffResponse
+    return StaffResponse(
+        id=new_staff.id,
+        nickname=new_staff.name,
+        role=new_staff.role,
+        status=new_staff.status,
+        is_active=False
+    )
+
 # ==========================================
 # 接口 2: 生成邀请 Token (点击邀请按钮时调用)
 # ==========================================
