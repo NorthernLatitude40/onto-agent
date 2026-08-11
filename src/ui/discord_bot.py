@@ -3,9 +3,9 @@ import asyncio
 import aiohttp
 import discord
 
-from src.config.config import AGENT_SERVER_URL, DISCORD_TOKEN
+from src.config.config import settings
 
-TOKEN = DISCORD_TOKEN
+TOKEN = settings.DISCORD_TOKEN
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -28,7 +28,7 @@ async def on_message(message):
 
     # 异步请求
     async with session.post(
-        AGENT_SERVER_URL + "/api/v1/chat",
+        settings.AGENT_SERVER_URL + "/api/v1/chat",
         json={"user_id": str(message.author.id), "message": message.content}
     ) as resp:
         

@@ -24,7 +24,8 @@ from src.model.staff_model import StaffModel
 from src.model.schema import CreateShopPayload, UpdateShopPayload, CreateInviteRequest, AcceptInviteRequest, CreateStaffRequest
 from src.api.auth_api import get_current_user, create_access_token
 from src.common.auth import require_roles
-from src.config.config import ENV
+from src.config.config import settings
+from src.dependencies.permissions import allow_admin_or_manager, allow_admin, allow_all_staff
 
 # 引入你的数据库连接、Session依赖与 ORM 模型
 from src.common.database import get_db
@@ -300,7 +301,7 @@ def get_staff_list(
     - 开发/测试环境：超级管理员可传 shop_id 跨店切换测试。
     - 线上生产环境：严禁超管或普通用户跨租户越权查询，强行绑定当前登录用户的 shop_id。
     """
-    is_production = ENV == "production"  # 请确保与你的环境变量匹配
+    is_production = settings.is_production  # 请确保与你的环境变量匹配
     is_super_admin = getattr(current_user, "role", None) == UserRole.ADMIN.value
 
     # 1. 确定最终生效的 shop_id
@@ -366,12 +367,8 @@ def get_staff_list(
 def create_staff(
     req: CreateStaffRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(allow_admin_or_manager)
 ):
-    # 权限校验：只有 ADMIN 或 MANAGER 可以添加员工
-    if current_user.role not in [UserRole.ADMIN.value, UserRole.MANAGER.value]:
-        raise HTTPException(status_code=403, detail="无权操作")
-
     if not current_user.shop_id:
         raise HTTPException(status_code=400, detail="当前用户未绑定店铺")
 

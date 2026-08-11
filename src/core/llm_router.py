@@ -7,11 +7,7 @@ from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
-from src.config.config import (
-    GEMINI_API_KEY,
-    HUGGINGFACEHUB_API_TOKEN,
-    OPENROUTER_API_KEY,
-)
+from src.config.config import settings
 
 
 class LLMRouter:
@@ -34,7 +30,7 @@ class LLMRouter:
         # ----------------------------
         self.gemini = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
-            api_key=GEMINI_API_KEY,
+            api_key=settings.GEMINI_API_KEY,
             temperature=0,
         )
 
@@ -43,7 +39,7 @@ class LLMRouter:
         # ----------------------------
         self.openrouter = ChatOpenAI(
             model="google/gemma-4-31b-it:free",
-            openai_api_key=OPENROUTER_API_KEY,
+            openai_api_key=settings.OPENROUTER_API_KEY,
             openai_api_base="https://openrouter.ai/api/v1",
             temperature=0,
         )
@@ -53,7 +49,7 @@ class LLMRouter:
         # ----------------------------
         hf_endpoint = HuggingFaceEndpoint(
             repo_id="Qwen/Qwen2.5-7B-Instruct",
-            huggingfacehub_api_token=HUGGINGFACEHUB_API_TOKEN,
+            huggingfacehub_api_token=settings.HUGGINGFACEHUB_API_TOKEN,
             temperature=0.1,
             task="text-generation",
         )
