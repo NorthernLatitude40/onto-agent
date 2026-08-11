@@ -554,8 +554,24 @@ class ChatPayload(BaseModel):
     session_id: str | None = None  # 允許外部傳入自訂的會話 ID，用於辨識不同用戶
 
 @shop_router.post("/chat")
-async def shop_chat(req: ChatPayload):
-    config = {"configurable": {"thread_id": req.session_id}}
+async def shop_chat(
+    req: ChatPayload,
+    # 🌟 1. 从 请求头(Header) 中提取 X-Shop-Id，默认可以给 None 或 抛出异常
+    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id"),
+    # 🌟 2. 前端从 storage 拿到的 role，可以在请求头加一个 X-User-Role 传过来
+    x_user_role: Optional[str] = Header("staff", alias="X-User-Role")
+):
+    # 校验 shop_id 是否存在
+    if not x_shop_id:
+        raise HTTPException(status_code=400, detail="请求头缺少 X-Shop-Id")
+    # 🌟 3. 将提取到的 shop_id 和 role 塞进 LangGraph 的 configurable 字典中
+    config = {
+        "configurable": {
+            "thread_id": req.session_id or "default_session",
+            "shop_id": x_shop_id,       # 传入整数类型的 shop_id
+            "role": x_user_role,         # 传入角色（如 admin, staff）
+        }
+    }
     
     # 执行 Agent
     result = await shop_agent.graph.ainvoke({"messages": [("user", req.message)]}, config)

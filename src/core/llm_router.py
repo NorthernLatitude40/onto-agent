@@ -156,7 +156,7 @@ class LLMRouter:
         # Level 2
         # ===================================================
 
-        if self.openrouter_available and OPENROUTER_API_KEY:
+        if self.openrouter_available and settings.OPENROUTER_API_KEY:
 
             try:
 
@@ -183,7 +183,7 @@ class LLMRouter:
         # Level 3
         # ===================================================
 
-        if HUGGINGFACEHUB_API_TOKEN:
+        if settings.HUGGINGFACEHUB_API_TOKEN:
 
             print("⚡ [Level 3] HuggingFace")
 
@@ -218,7 +218,7 @@ class LLMRouter:
         return {
             "gemini": self.gemini_available,
             "openrouter": self.openrouter_available,
-            "huggingface": bool(HUGGINGFACEHUB_API_TOKEN),
+            "huggingface": bool(settings.HUGGINGFACEHUB_API_TOKEN),
         }
     
 router = LLMRouter()
