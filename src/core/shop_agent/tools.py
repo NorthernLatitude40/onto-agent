@@ -20,6 +20,10 @@ from src.model.models import (
     OutboundOrderItem, 
     Partner  # ⬅️ 必须显式 import 导入进来！
 )
+from src.model.tools_schema import QueryShopDataInput
+from langchain_core.tools import tool, InjectedToolArg
+from typing import Optional, Annotated
+from langchain_core.runnables import RunnableConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -101,93 +105,105 @@ def sell_device(model_or_id: str, sell_price: float, payment_method: str = "微�
 # ==========================================
 # 二、 统一数据查询万能工具 (Fat Query Tool)
 # ==========================================
-
-class QueryShopDataInput(BaseModel):
-    query_type: str = Field(
-        ...,
-        description="""查询类型（必填）：
-        - 'stock': 查当前在库设备/库存；
-        - 'report': 查经营报表、利润、收入支出汇总数字；
-        - 'inbound': 查历史进货/收机明细列表；
-        - 'outbound': 查历史销售/出库/卖出明细列表；
-        - 'finance': 查财务收支流水列表。
-        """
-    )
-    time_range: Optional[str] = Field(
-        "today", 
-        description="时间范围（查库存时可忽略）：'today'(今天), 'yesterday'(昨天), 'this_month'(本月), 'all'(全部时间)"
-    )
-    keyword: Optional[str] = Field(
-        "", 
-        description="搜索关键词：如手机型号('iPhone 13')、客户姓名或备注信息等"
-    )
-    payment_method: Optional[str] = Field(
-        None,
-        description="支付方式过滤：如 '微信', '支付宝', '现金'"
-    )
-
-
+# ----------------------------------------------------
+# 2. Tool 函数实现（聚焦分支内精细化拦截与脱敏）
+# ----------------------------------------------------
 @tool("query_shop_data", args_schema=QueryShopDataInput)
 def query_shop_data(
     query_type: str, 
     time_range: str = "today", 
     keyword: str = "", 
-    payment_method: Optional[str] = None
+    payment_method: Optional[str] = None,
+    # 🌟 隐式捕获 Context（AOP 装饰器拦截通过后，这里能拿到校验后的用户信息）
+    config: Annotated[RunnableConfig, InjectedToolArg] = None
 ) -> dict:
     """
     【店铺数据查询统一入口】
     无论是查当前库存、查财务利润报表，还是查历史收货/卖货/财务流水明细，统统强制调用此函数！
     """
+    # 提取角色和店铺 ID
+    context = config.get("configurable", {}) if config else {}
+    current_shop_id = context.get("shop_id")
+    user_role = context.get("role", "staff")  # admin, manager, staff
+    
+    is_admin = user_role in ["admin", "manager", "boss"]
+
     db = SessionLocal()
     try:
-        # ----------------------------------------------------
-        # 分支 1：查当前库存 (stock)
-        # ----------------------------------------------------
+        # ====================================================
+        # 分支 1：查当前库存 (stock) -> 字段级脱敏拦截
+        # ====================================================
         if query_type == "stock":
-            items = InventoryService.query_stock_items(db, keyword=keyword)
-            stock_list = [
-                {
+            items = InventoryService.query_stock_items(db, shop_id=current_shop_id, keyword=keyword)
+            
+            stock_list = []
+            for item in items:
+                data = {
                     "id": item.id,
                     "model": getattr(item, "title", getattr(item, "model", "未知设备")),
                     "spec": getattr(item, "spec", None) or "标准",
-                    "cost": float(getattr(item, "purchase_price", getattr(item, "cost", 0)) or 0)
                 }
-                for item in items
-            ]
+                
+                # 🌟 [字段级拦截] 非管理员隐藏进货成本 (cost)
+                if is_admin:
+                    data["cost"] = float(getattr(item, "purchase_price", getattr(item, "cost", 0)) or 0)
+                
+                stock_list.append(data)
+
             return {
                 "action": "query_stock",
                 "status": "success",
                 "keyword": keyword,
                 "total_count": len(stock_list),
-                "items": stock_list
+                "items": stock_list,
+                # 🌟 给 AI 明确的上下文提示
+                "security_notice": "" if is_admin else "提示：当前视图已根据您的员工权限脱敏，隐藏了设备成本价格。"
             }
 
-        # ----------------------------------------------------
-        # 分支 2：查经营报表/利润汇总数字 (report)
-        # ----------------------------------------------------
+        # ====================================================
+        # 分支 2：查经营报表 (report) -> 范围/指标裁剪拦截
+        # ====================================================
         elif query_type == "report":
-            report_data = FinancialService.get_report_data(db, time_range=time_range)
-            time_text_map = {"today": "今日", "yesterday": "昨日", "this_month": "本月"}
+            report_data = FinancialService.get_report_data(
+                db, 
+                shop_id=current_shop_id, 
+                time_range=time_range
+            )
+            time_text_map = {"today": "今日", "yesterday": "昨日", "this_month": "本月", "all": "历史累计"}
+            
+            # 基础经营数字（普通员工可见）
+            report_body = {
+                "sales_count": int(report_data.get("sales_count", 0)),
+            }
+            
+            # 🌟 [指标级拦截] 只有管理员能看到利润、总收入和总支出
+            if is_admin:
+                report_body["profit"] = float(report_data.get("profit", 0.0))
+                report_body["income"] = float(report_data.get("income", 0.0))
+                report_body["expense"] = float(report_data.get("expense", 0.0))
+
             return {
                 "action": "query_report",
                 "status": "success",
                 "time_range_text": time_text_map.get(time_range, "经营"),
-                "report": {
-                    "profit": float(report_data.get("profit", 0.0)),
-                    "income": float(report_data.get("income", 0.0)),
-                    "expense": float(report_data.get("expense", 0.0)),
-                    "sales_count": int(report_data.get("sales_count", 0)),
-                }
+                "report": report_body,
+                "security_notice": "" if is_admin else "提示：由于角色权限限制，仅展示销量数据，利润与财务汇总已屏蔽。"
             }
 
-        # ----------------------------------------------------
-        # 分支 3：查历史明细/流水 (inbound / outbound / finance)
-        # ----------------------------------------------------
+        # ====================================================
+        # 分支 3：查历史明细 (inbound / outbound / finance)
+        # ====================================================
         elif query_type in ["inbound", "outbound", "finance"]:
-            # 时间解析
+            # 🌟 [时间范围降级拦截]：普通员工查历史明细最多只能看近 7 天/今天，禁止跨月查全部
+            if not is_admin and time_range == "all":
+                time_range = "this_month"  # 强制将 'all' 降级为 'this_month'
+                range_degraded = True
+            else:
+                range_degraded = False
+
+            # 解析时间
             now = datetime.now()
             start_time, end_time = None, None
-
             if time_range == "today":
                 start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 end_time = now
@@ -201,41 +217,37 @@ def query_shop_data(
 
             items_result = []
 
-            # 3.A 历史入库/收货 (inbound)
+            # 3.A 历史入库 (inbound)
             if query_type == "inbound":
-                query = db.query(InventoryModel)
+                query = db.query(InventoryModel).filter(InventoryModel.shop_id == current_shop_id)
                 if start_time and end_time:
                     query = query.filter(InventoryModel.in_stock_time.between(start_time, end_time))
                 if keyword:
                     query = query.filter(InventoryModel.title.ilike(f"%{keyword}%"))
                 
                 records = query.order_by(InventoryModel.in_stock_time.desc()).all()
-                items_result = [
-                    {
+                for item in records:
+                    row = {
                         "id": item.id,
                         "model": item.title,
                         "spec": item.spec or "标准",
-                        "purchase_price": float(item.purchase_price or 0),
                         "time": item.in_stock_time.strftime("%Y-%m-%d %H:%M") if item.in_stock_time else "",
                         "remark": item.remark or ""
                     }
-                    for item in records
-                ]
+                    # 🌟 进货价脱敏
+                    if is_admin:
+                        row["purchase_price"] = float(item.purchase_price or 0)
+                    items_result.append(row)
 
             # 3.B 历史财务流水 (finance)
             elif query_type == "finance":
-                query = db.query(FinancialRecord)
+                query = db.query(FinancialRecord).filter(FinancialRecord.shop_id == current_shop_id)
                 if start_time and end_time:
                     query = query.filter(FinancialRecord.record_time.between(start_time, end_time))
                 if payment_method:
                     query = query.filter(FinancialRecord.payment_method == payment_method)
                 if keyword:
-                    query = query.filter(
-                        or_(
-                            FinancialRecord.category.ilike(f"%{keyword}%"),
-                            FinancialRecord.remark.ilike(f"%{keyword}%")
-                        )
-                    )
+                    query = query.filter(or_(FinancialRecord.category.ilike(f"%{keyword}%"), FinancialRecord.remark.ilike(f"%{keyword}%")))
 
                 records = query.order_by(FinancialRecord.record_time.desc()).all()
                 items_result = [
@@ -251,39 +263,41 @@ def query_shop_data(
                     for item in records
                 ]
 
-            # 3.C 历史销售/出库 (outbound) - 标准规范：查 OutboundOrderItem -> OutboundOrder -> InventoryModel
+            # 3.C 历史销售 (outbound)
             elif query_type == "outbound":
-                query = db.query(
-                    OutboundOrderItem, 
-                    OutboundOrder, 
-                    InventoryModel
-                ).select_from(OutboundOrderItem)\
+                query = db.query(OutboundOrderItem, OutboundOrder, InventoryModel)\
+                 .select_from(OutboundOrderItem)\
                  .outerjoin(OutboundOrder, OutboundOrderItem.outbound_order_id == OutboundOrder.id)\
-                 .outerjoin(InventoryModel, OutboundOrderItem.inventory_id == InventoryModel.id)
+                 .outerjoin(InventoryModel, OutboundOrderItem.inventory_id == InventoryModel.id)\
+                 .filter(OutboundOrder.shop_id == current_shop_id)
 
-                # 时间区间过滤
                 if start_time and end_time:
                     query = query.filter(OutboundOrder.created_at.between(start_time, end_time))
-
-                # 按型号/关键词过滤
                 if keyword:
                     query = query.filter(InventoryModel.title.ilike(f"%{keyword}%"))
 
                 records = query.order_by(OutboundOrder.created_at.desc()).all()
 
-                items_result = [
-                    {
+                for item in records:
+                    row = {
                         "id": item.InventoryModel.id if item.InventoryModel else item.OutboundOrderItem.id,
                         "model": item.InventoryModel.title if item.InventoryModel else "设备已删除/未知型号",
-                        "spec": (item.InventoryModel.spec if item.InventoryModel else None) or "标准",
-                        "purchase_price": float(item.OutboundOrderItem.selling_price or 0), # 成交价
-                        "amount": float(item.OutboundOrderItem.selling_price or 0),
-                        "profit": float(item.OutboundOrderItem.profit or 0),
-                        "type": "已售出",
+                        "spec": (item.InventoryModel.spec if item.InventoryModel else None) or "Standard",
+                        "selling_price": float(item.OutboundOrderItem.selling_price or 0), # 售价放行
                         "time": item.OutboundOrder.created_at.strftime("%Y-%m-%d %H:%M") if (item.OutboundOrder and item.OutboundOrder.created_at) else ""
                     }
-                    for item in records
-                ]
+                    # 🌟 [利润脱敏] 仅管理员可看该单的利润 (profit)
+                    if is_admin:
+                        row["profit"] = float(item.OutboundOrderItem.profit or 0)
+                    
+                    items_result.append(row)
+
+            # 拼接给 AI 的交互提示文字
+            notice_msg = ""
+            if range_degraded:
+                notice_msg += "（注：非管理员角色暂不支持全量历史查询，已为您自动切换为【本月】数据）"
+            if not is_admin:
+                notice_msg += "（注：部分敏感财务利润字段已根据权限隐藏）"
 
             return {
                 "action": "universal_query",
@@ -291,25 +305,16 @@ def query_shop_data(
                 "target": query_type,
                 "time_range": time_range,
                 "total_count": len(items_result),
-                "items": items_result
+                "items": items_result,
+                "security_notice": notice_msg.strip()
             }
 
         else:
-            return {
-                "status": "error",
-                "message": f"未知的查询类型 query_type: {query_type}",
-                "total_count": 0,
-                "items": []
-            }
+            return {"status": "error", "message": f"未知的查询类型: {query_type}", "total_count": 0, "items": []}
 
     except Exception as e:
         logger.error(f"❌ [query_shop_data] 查询报错: {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "message": f"查询失败: {str(e)}",
-            "total_count": 0,
-            "items": []
-        }
+        return {"status": "error", "message": f"系统内部查询异常: {str(e)}", "total_count": 0, "items": []}
     finally:
         db.close()
 

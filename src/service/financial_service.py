@@ -7,7 +7,7 @@ from src.model.models import FinancialRecord, InventoryModel as Inventory
 class FinancialService:
 
     @staticmethod
-    def get_report_data(db: Session, time_range: str = "today") -> dict:
+    def get_report_data(db: Session, shop_id: int,  time_range: str = "today") -> dict:
         """
         根据 FinancialRecord 财务表统计经营报表
         time_range 可选值: 'today' (今天), 'yesterday' (昨天), 'this_month' (本月)
@@ -32,7 +32,8 @@ class FinancialService:
         # 2. 从 FinancialRecord 表中查询指定时间段内的所有财务记录
         records = db.query(FinancialRecord).filter(
             FinancialRecord.record_time >= start_time,
-            FinancialRecord.record_time <= end_time
+            FinancialRecord.record_time <= end_time,
+            FinancialRecord.shop_id == shop_id
         ).all()
 
         # 3. 统计收入、支出与纯毛利
