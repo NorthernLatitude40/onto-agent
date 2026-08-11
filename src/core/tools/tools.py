@@ -9,7 +9,7 @@ import openpyxl
 from langchain_core.tools import tool
 from openpyxl.styles import Alignment, PatternFill
 
-from src.config.config import ANYTHINGLLM_API_KEY, ANYTHINGLLM_BASE_URL, WORKSPACE_SLUG
+from src.config.config import settings
 
 # 引入 Pydantic 结构
 from src.ingestion.schema.screen_item import DesignDocument
@@ -19,7 +19,7 @@ from src.ontology.screen_dict import HeaderSemanticResolver, SheetSemanticResolv
 @tool
 def search_official_knowledge_base(query: str) -> str:
     """RAG 查询官方售票知识库"""
-    url = f"{ANYTHINGLLM_BASE_URL}/workspace/{WORKSPACE_SLUG}/chat"
+    url = f"{settings.ANYTHINGLLM_BASE_URL}/workspace/{settings.WORKSPACE_SLUG}/chat"
     payload = {
         "message": query,
         "mode": "query",
@@ -27,7 +27,7 @@ def search_official_knowledge_base(query: str) -> str:
         "temperature": 0.0,
     }
     headers = {
-        "Authorization": f"Bearer {ANYTHINGLLM_API_KEY}",
+        "Authorization": f"Bearer {settings.ANYTHINGLLM_API_KEY}",
         "Content-Type": "application/json",
     }
 

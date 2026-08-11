@@ -1,5 +1,5 @@
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from src.model.user_model import UserRole
 
 class UserUpdateSchema(BaseModel):
@@ -49,3 +49,18 @@ class CreateInviteRequest(BaseModel):
 # 3. 员工接受邀请请求
 class AcceptInviteRequest(BaseModel):
     invite_token: str = Field(..., description="邀请Token")
+
+class UserOutSchema(BaseModel):
+    id: int
+    nickname: str
+    avatar_url: Optional[str] = None
+    phone: Optional[str] = None
+    role: str
+
+    # 允许从 SQLAlchemy ORM 对象直接读取属性填充模型
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TokenOutSchema(BaseModel):
+    token: str
+    user_info: UserOutSchema
