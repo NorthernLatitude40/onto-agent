@@ -177,20 +177,29 @@ COMMENT ON COLUMN public.sys_user.shop_id IS '关联店铺ID';
 -- 8. shop
 -- ========================================================
 -- 1. 创建 shops 表 (PostgreSQL 语法)
-CREATE TABLE IF NOT EXISTS shops (
-  id SERIAL PRIMARY KEY,
-  name VARCHAR(100) NOT NULL,
-  logo VARCHAR(255) DEFAULT '',
-  contact_name VARCHAR(50) DEFAULT '',
-  contact_phone VARCHAR(20) DEFAULT '',
-  province VARCHAR(50) DEFAULT '',
-  city VARCHAR(50) DEFAULT '',
-  district VARCHAR(50) DEFAULT '',
-  address_detail VARCHAR(255) DEFAULT '',
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+-- Drop table
+-- DROP TABLE public.shops;
+
+CREATE TABLE public.shops (
+	id serial4 NOT NULL,
+	owner_id int4 NOT NULL, -- 新增：店主/创建者ID
+	"name" varchar(100) NOT NULL,
+	logo varchar(255) NULL DEFAULT ''::character varying,
+	contact_name varchar(50) NULL DEFAULT ''::character varying,
+	contact_phone varchar(20) NULL DEFAULT ''::character varying,
+	province varchar(50) NULL DEFAULT ''::character varying,
+	city varchar(50) NULL DEFAULT ''::character varying,
+	district varchar(50) NULL DEFAULT ''::character varying,
+	address_detail varchar(255) NULL DEFAULT ''::character varying,
+	is_active bool NULL DEFAULT true,
+	created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+	CONSTRAINT shops_pkey PRIMARY KEY (id),
+	CONSTRAINT fk_shops_owner FOREIGN KEY (owner_id) REFERENCES public.users(id) ON DELETE RESTRICT
 );
+
+-- 为常用查询字段建立索引
+CREATE INDEX idx_shops_owner_id ON public.shops USING btree (owner_id);
 
 -- 添加表与字段注释 (PostgreSQL 规范写法)
 COMMENT ON TABLE shops IS '店铺基础信息表';

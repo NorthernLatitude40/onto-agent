@@ -51,6 +51,11 @@ TRANSLATIONS.update({
         "en-US": "Failed to obtain user OpenID.",
         "ja-JP": "ユーザー OpenID を取得できませんでした。",
     },
+    "USER_ALREADY_MEMBER": {
+        "zh-CN": "您已经是该商场的成员，请勿重复操作",
+        "en-US": "You are already a member of this mall; duplicate operations are not allowed.",
+        "ja-JP": "すでに当施設のメンバーとして登録されています。重複して登録することはできません。"
+    },
 })
 
 DEFAULT_LANGUAGE = "en-US"
