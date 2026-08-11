@@ -62,6 +62,13 @@ class OutboundOrder(Base):
     total_profit = Column(Numeric(10, 2), nullable=False, default=0.00)
     payment_status = Column(Integer, nullable=False, default=1) # 1-已全额 2-挂账 3-未付
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    shop_id = Column(
+            Integer, 
+            ForeignKey("shops.id", ondelete="CASCADE"), 
+            nullable=False, 
+            index=True, 
+            comment="所属店铺ID"
+        )
 
 # ==========================================
 # 出库订单明细表 (outbound_order_item)
