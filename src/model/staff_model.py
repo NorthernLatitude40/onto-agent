@@ -1,8 +1,11 @@
-from sqlalchemy import Column, BigInteger, Integer, String, DateTime, ForeignKey, SmallInteger, func
+from sqlalchemy import Column, BigInteger, Integer, String, DateTime, ForeignKey, SmallInteger, func, UniqueConstraint
 from sqlalchemy.orm import relationship
 from src.common.database import Base
 
 class StaffModel(Base):
+    """
+    店铺与员工的绑定关系表（一对多或多对多）
+    """
     __tablename__ = "shop_staff"
 
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
@@ -22,3 +25,8 @@ class StaffModel(Base):
 
     # 建立与 User 的 ORM 关系
     user = relationship("User", backref="staff_profiles")
+
+    __table_args__ = (
+        # 保证一个用户在同一个店铺只被绑定一次
+        UniqueConstraint('shop_id', 'user_id', name='uix_shop_user'), 
+    )

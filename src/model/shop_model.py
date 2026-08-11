@@ -20,6 +20,7 @@ class ShopModel(Base):
     is_active = Column(Boolean, default=True, comment="店铺状态：1-正常，0-禁用")
     created_at = Column(DateTime, default=datetime.now, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+    owner_id = Column(Integer, ForeignKey("users.id")) # 店主/创建者
 
     # 1对多 关联：一个店铺拥有多个员工/用户
     users = relationship("User", back_populates="shop")

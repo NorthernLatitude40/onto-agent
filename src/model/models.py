@@ -20,7 +20,8 @@ class InventoryModel(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     in_stock_time = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
-
+    # 💡 补上 shop_id 字段定义：
+    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False, index=True, comment="所属店铺ID")
 
 class FinancialRecord(Base):
     __tablename__ = "financial_record"
@@ -37,7 +38,14 @@ class FinancialRecord(Base):
     payment_method = Column(String(30), default="微信")
     record_time = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     remark = Column(String(255), nullable=True)
-
+    # 💡 补上 shop_id 字段定义
+    shop_id = Column(
+        Integer, 
+        ForeignKey("shops.id", ondelete="CASCADE"), 
+        nullable=False, 
+        index=True, 
+        comment="所属店铺ID"
+    )
 
 
 # ==========================================
