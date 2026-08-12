@@ -644,13 +644,22 @@ class AddDeviceConfirmPayload(BaseModel):
 @shop_router.post("/device/add", summary="确认设备入库落库")
 async def confirm_add_device(
     payload: AddDeviceConfirmPayload, 
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    # 🌟 提取请求头里的 X-Shop-Id
+    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id")
 ):
     """
     前端点击【确认入库】卡片时调用的接口：
     1. 在 inventory 表创建一条在库记录 (status=1)
     2. 在 financial_record 表创建一条支出流水 (type=2)
     """
+    # 🌟 校验 shop_id，如果没传或者拿不到直接拦住，避免抛 500 报错
+    if not x_shop_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="缺少必要参数：请求头中未包含 X-Shop-Id"
+        )
+    
     # 🌟 1. 生成唯一请求签名 (Hash Key)
     # 根据用户设备特征（型号、成本、备注等）计算 MD5 摘要
     raw_str = f"add_{payload.model}_{payload.cost}_{payload.notes}"
@@ -674,7 +683,8 @@ async def confirm_add_device(
             spec=f"颜色:{payload.color}" if payload.color != "未知" else "规格:标准",
             remark=payload.notes,
             category=2,  # 2 - 二手机
-            status=1     # 1 - 在库
+            status=1,     # 1 - 在库
+            shop_id=x_shop_id
         )
         db.add(new_device)
         db.flush()  # 提前获取自动生成的 ID，但不提交事务
@@ -690,7 +700,8 @@ async def confirm_add_device(
             business_type=1,                         # 关联业务：1-手机设备
             business_id=new_device.id,               # 绑定新增的设备 ID
             payment_method="微信",                    # 默认方式，可根据前端调整
-            remark=f"设备回收入库：{payload.model} ({payload.notes or ''})"
+            remark=f"设备回收入库：{payload.model} ({payload.notes or ''})",
+            shop_id=x_shop_id
         )
         db.add(financial_record)
 
@@ -729,14 +740,59 @@ class SellDeviceConfirmPayload(BaseModel):
     payment_method: Optional[str] = Field(default="微信", description="收款方式")
     notes: Optional[str] = Field(default="二手销售", description="备注信息")
 
+import re
+
+# 1. 定义指代词黑名单（正则表达式）
+PRONOUN_PATTERN = re.compile(
+    r"^(刚才|上|这|那|刚刚|那个|这台|那台|上一台|刚才这台|刚才那台|它|把它)+(机器|手机|设备|产品|东西)?$"
+)
+
+def clean_device_model(model_str: str, db_session, shop_id: int) -> str:
+    """后端防御：清洗 LLM 传过来的型号，如果是代词则自动查找最近一条库存设备"""
+    if not model_str:
+        return ""
+
+    # 去掉前后空格
+    cleaned = model_str.strip()
+
+    # 如果命中黑名单（比如：上一台、刚才这台机器）
+    if PRONOUN_PATTERN.match(cleaned) or cleaned in ["UNKNOWN", "未知"]:
+        # 🟢 自动去数据库查最近入库的一台【在库】设备
+        latest_inventory = (
+            db_session.query(InventoryModel)
+            .filter(InventoryModel.shop_id == shop_id, InventoryModel.status == 1) # 1: 在库
+            .order_by(InventoryModel.created_at.desc())
+            .first()
+        )
+        
+        if latest_inventory:
+            # 用真实设备的名称替换掉代词！
+            return latest_inventory.title
+        else:
+            raise ValueError("没有找到最近可出售的在库设备")
+
+    return cleaned
 
 @shop_router.post("/device/sell", summary="确认设备出售出库")
 async def confirm_sell_device(
     payload: SellDeviceConfirmPayload, 
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    # 🌟 提取请求头里的 X-Shop-Id
+    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id")
 ):
+
+    # 🌟 校验 shop_id，如果没传或者拿不到直接拦住，避免抛 500 报错
+    if not x_shop_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="缺少必要参数：请求头中未包含 X-Shop-Id"
+        )
+
+    #2. 在你的 sell_device 处理函数里调用：
+    real_model = clean_device_model(payload.model, db, x_shop_id)
+
     # 1. 简易 Redis 防重锁 (修改 key 前缀为 sell)
-    raw_str = f"sell_{payload.model}_{payload.price}_{payload.notes}"
+    raw_str = f"sell_{real_model}_{payload.price}_{payload.notes}"
     lock_key = f"lock:device_sell:{hashlib.md5(raw_str.encode()).hexdigest()}"
     is_locked = redis_client.set(lock_key, "locked", ex=5, nx=True)
 
@@ -750,17 +806,18 @@ async def confirm_sell_device(
         # 2. 查找待售设备
         query = db.query(InventoryModel).filter(
             InventoryModel.status == 1,
+            InventoryModel.shop_id == x_shop_id,
             InventoryModel.stock_quantity > 0
         )
-        if payload.model.isdigit():
-            device = query.filter(InventoryModel.id == int(payload.model)).first()
+        if real_model.isdigit():
+            device = query.filter(InventoryModel.id == int(real_model)).first()
         else:
-            device = query.filter(InventoryModel.title.ilike(f"%{payload.model}%")).first()
+            device = query.filter(InventoryModel.title.ilike(f"%{real_model}%")).first()
 
         if not device:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"未在库存中找到待售设备：'{payload.model}'"
+                detail=f"未在库存中找到待售设备：'{real_model}'"
             )
 
         # 3. 计算金额
@@ -781,7 +838,8 @@ async def confirm_sell_device(
         outbound_order = OutboundOrder(
             order_sn=order_sn,
             total_amount=sell_price,
-            created_at=datetime.now()
+            created_at=datetime.now(),
+            shop_id=x_shop_id
         )
         db.add(outbound_order)
         db.flush()  # 刷入数据库以获取 outbound_order.id
@@ -811,7 +869,9 @@ async def confirm_sell_device(
             business_type=1,
             business_id=outbound_order.id,  # 此时关联的是出库单 ID
             payment_method=payload.payment_method,
-            remark=f"设备出售出库：{device.title} | 订单号:{order_sn}"
+            remark=f"设备出售出库：{device.title} | 订单号:{order_sn}",
+            shop_id=x_shop_id,
+            device_sn_code=device.sn_code
         )
         db.add(financial_record)
 

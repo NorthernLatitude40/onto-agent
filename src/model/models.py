@@ -46,6 +46,7 @@ class FinancialRecord(Base):
         index=True, 
         comment="所属店铺ID"
     )
+    device_sn_code = Column(String(64), nullable=False, unique=True)
 
 
 # ==========================================
