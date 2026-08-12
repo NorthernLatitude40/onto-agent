@@ -23,10 +23,12 @@ class StaffModel(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    # 建立与 User 的 ORM 关系
+# 1. 建立与 User 的 ORM 关系（确保 User 对应的 __tablename__ 为 sys_user）
     user = relationship("User", backref="staff_profiles")
 
+    # 2. 反向关联到店铺 (一个员工属于一个店铺)
+    shop = relationship("ShopModel", back_populates="staffs", foreign_keys=[shop_id])
+
     __table_args__ = (
-        # 保证一个用户在同一个店铺只被绑定一次
         UniqueConstraint('shop_id', 'user_id', name='uix_shop_user'), 
     )
