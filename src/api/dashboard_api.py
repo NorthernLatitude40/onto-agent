@@ -6,6 +6,8 @@ import json
 import re
 import hashlib
 import ast
+import jwt
+from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.orm import Session
 from src.common.database import get_db # 获取数据库连接
@@ -41,6 +43,7 @@ from src.model.models import (
     Partner  # ⬅️ 必须显式 import 导入进来！
 )
 from src.common.redis_client import redis_client
+from src.model.inventory_schema import StockListResponse
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +301,7 @@ def get_staff_list(
     查询指定店铺下的员工列表。
     - 开发/测试环境：超级管理员可传 shop_id 跨店切换测试。
     - 线上生产环境：严禁超管或普通用户跨租户越权查询，强行绑定当前登录用户的 shop_id。
+    - 🌟 自动生成 Token：对待激活员工 (status==0) 自动注入 invite_token
     """
     is_production = settings.is_production  # 请确保与你的环境变量匹配
     is_super_admin = getattr(current_user, "role", None) == ShopRole.OWNER.value
@@ -325,7 +329,7 @@ def get_staff_list(
                 detail="您无权查看非本店铺的员工信息！"
             )
 
-    # 2. 🌟 核心重构：从数据库 StaffModel (shop_staff) 表检索员工
+    # 2. 从数据库 StaffModel (shop_staff) 表检索员工
     staff_records = db.query(StaffModel).filter(
         StaffModel.shop_id == target_shop_id
     ).all()
@@ -333,13 +337,28 @@ def get_staff_list(
     # 3. 转化为小程序前端所需格式
     result_list = []
     for s in staff_records:
+        is_active = (s.status == 1)  # status==1 表示已绑定在职，0 表示待接受邀请
+        is_owner = (s.role == ShopRole.OWNER.value or s.role == "owner")
+        
+        # 🌟 核心增补逻辑：如果是待激活/待绑定员工，为其自动生成专属加密 invite_token
+        invite_token = None
+        if not is_active:
+            # 💡 这里的签发逻辑请替换为你系统中生成加密 Token 的实际函数
+            # 必须包含 shop_id 和 staff_id (s.id) 信息
+            invite_token = create_access_token(
+                data={"shop_id": target_shop_id, "staff_id": s.id}
+            )
+
         result_list.append({
-            "id": s.id,                           # 🌟 这是 shop_staff 的 ID，用于 generate-invite
+            "id": s.id,                             # shop_staff 档案 ID
             "name": s.name or "员工",
-            "is_active": (s.status == 1),        # status==1 表示已绑定在职，0 表示待接受邀请
-            "isCreator": (s.role == ShopRole.OWNER.value or s.role == "owner"), 
-            "roleName": "店长" if (s.role == ShopRole.OWNER.value or s.role == "owner") else "店员",
-            "role": s.role
+            "is_active": is_active,
+            "isActive": is_active,                # 兼容驼峰与下划线命名
+            "status": s.status,
+            "isCreator": is_owner, 
+            "roleName": "店长" if is_owner else "店员",
+            "role": s.role,
+            "invite_token": invite_token          # 🌟 将 Token 返回给前端
         })
 
     # 兜底数据（如果数据库为空，防止小程序渲染崩掉）
@@ -348,9 +367,12 @@ def get_staff_list(
             "id": current_user.id,
             "name": getattr(current_user, "nickname", None) or getattr(current_user, "username", "店长"),
             "is_active": True,
+            "isActive": True,
+            "status": 1,
             "isCreator": True,
             "roleName": "店长",
-            "role": "admin"
+            "role": "admin",
+            "invite_token": None
         }]
 
     return {
@@ -448,6 +470,52 @@ def create_staff(
         is_active=False
     )
 
+# ------------------------------------------------------------------
+# 2. 接口实现：GET /api/v1/shop/inventory/list
+# ------------------------------------------------------------------
+@shop_router.get("/inventory/list", response_model=StockListResponse)
+def get_inventory_list(
+    status: Optional[int] = Query(None, description="库存状态: 1-在库, 2-已售, 3-退货等"),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)  # 校验身份并获取所属店铺
+):
+    """
+    获取当前店铺下的设备库存列表（支持按状态筛选）
+    """
+    # 1. 通过 current_user.id 到 shop_staff 表中查询绑定的员工记录 (且状态必须为正常在职 status=1)
+    staff_record = db.query(StaffModel).filter(
+        StaffModel.user_id == current_user.id,
+        StaffModel.status == 1  # 确保该员工状态正常（已接受邀请且未离职）
+    ).first()
+
+    if not staff_record:
+        # RFC 7807 规范抛出 400 或 403 错误
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="当前用户未绑定任何店铺或暂无店铺操作权限"
+        )
+    
+    shop_id = staff_record.shop_id
+    staff_id = staff_record.id
+    if not shop_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="当前用户未绑定任何店铺"
+        )
+
+    # 基础查询：过滤当前店铺的数据
+    query = db.query(InventoryModel).filter(InventoryModel.shop_id == shop_id)
+
+    # 如果前端传了 status 参数（如 status=1 在库设备）
+    if status is not None:
+        query = query.filter(InventoryModel.status == status)
+
+    # 按创建时间/更新时间倒序
+    items = query.order_by(InventoryModel.created_at.desc()).all()
+
+    # 遵循 Bare Payload 规范，直接返回对象字典（自动被 Pydantic 序列化为 {"items": [...]}）
+    return {"items": items}
+
 # ==========================================
 # 接口 2: 生成邀请 Token (点击邀请按钮时调用)
 # ==========================================
@@ -489,9 +557,12 @@ def accept_invite(
 ):
     # 1. 解析 token (格式: INVITE_staffId_shopId_timestamp)
     try:
+        payload = jwt.decode(
+            req.invite_token, settings.JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM]
+        )
         parts = req.invite_token.split("_")
-        staff_id = int(parts[1])
-        shop_id = int(parts[2])
+        staff_id = payload.get("staff_id")
+        shop_id = payload.get("shop_id")
     except Exception:
         raise BusinessException(status_code=400, detail="无效的邀请链接")
 

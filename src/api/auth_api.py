@@ -17,12 +17,9 @@ from src.model.schema import UserOutSchema, TokenOutSchema, UserUpdateSchema
 from src.model.response_models import LoginResponse, UserResponse
 from src.common.exceptions import BusinessException
 from src.model.staff_model import StaffModel
+from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
 
 router = APIRouter(prefix="/api/v1/auth", tags=["认证鉴权"])
-
-# 常量配置
-JWT_ALGORITHM = "HS256"
-TOKEN_EXPIRE_HOURS = 24 * 7  # Token 有效期 7 天
 
 security = HTTPBearer()
 
