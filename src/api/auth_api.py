@@ -16,6 +16,7 @@ from src.model.user_model import User
 from src.model.schema import UserOutSchema, TokenOutSchema, UserUpdateSchema
 from src.model.response_models import LoginResponse, UserResponse
 from src.common.exceptions import BusinessException
+from src.model.staff_model import StaffModel
 
 router = APIRouter(prefix="/api/v1/auth", tags=["认证鉴权"])
 
@@ -173,9 +174,18 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
     status_code=status.HTTP_200_OK,
     summary="获取当前登录用户信息"
 )
-async def get_my_info(current_user: User = Depends(get_current_user)):
-    return current_user
+async def get_my_info(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+    ):
 
+    staff_rel = db.query(StaffModel).filter(
+        StaffModel.user_id == current_user.id
+    ).first()
+    if staff_rel:
+        current_user.nickname = staff_rel.name
+        current_user.role = staff_rel.role
+    return current_user
 
 @router.put(
     "/me", 
@@ -186,9 +196,9 @@ async def get_my_info(current_user: User = Depends(get_current_user)):
 def update_my_info(
     user_in: UserUpdateSchema,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),  # 修正：统一保持为同步 Session
+    db: Session = Depends(get_db),
 ):
-    """修改当前登录人的基本信息"""
+    """修改当前登录人的基本信息（手机号存 User 表，姓名/备注存 shop_staff 表）"""
     update_data = user_in.model_dump(exclude_unset=True)
 
     # 1. 校验是否有传要修改的字段
@@ -198,12 +208,54 @@ def update_my_info(
             code="NO_UPDATE_FIELDS_PROVIDED"
         )
 
-    # 动态修改字段
-    for field, value in update_data.items():
-        setattr(current_user, field, value)
+    user_updated = False
+    staff_updated = False
 
-    db.add(current_user)
-    db.commit()
-    db.refresh(current_user)
+    # 2. 更新 User 表（手机号）
+    if "phone" in update_data:
+        new_phone = update_data.pop("phone")
+        
+        existing = db.query(User).filter(User.phone == new_phone, User.id != current_user.id).first()
+        if existing:
+            raise BusinessException(status_code=400, code="PHONE_EXISTS", message="该手机号已被使用")
+            
+        current_user.phone = new_phone
+        user_updated = True
+
+    # 3. 更新 StaffModel 表（姓名/备注 name）
+    if "nickname" in update_data:
+        new_name = update_data.pop("nickname")
+        
+        # 从 current_user.staff_profiles (根据关系获取) 中拿到当前店铺的员工记录
+        # 如果用户只绑定了一个店铺，可以直接拿第一条；如果有多店铺，可根据当前上下文的 shop_id 过滤
+        staff_info = None
+        if hasattr(current_user, "staff_profiles") and current_user.staff_profiles:
+            # 找到状态正常的 staff 记录（或者你可以加上 current_shop_id 过滤）
+            staff_info = next((s for s in current_user.staff_profiles if s.status == 1), current_user.staff_profiles[0])
+        
+        if not staff_info:
+            # 如果没有查到 relationship 关联，直接去数据库查
+            staff_info = db.query(StaffModel).filter(StaffModel.user_id == current_user.id).first()
+
+        if staff_info:
+            staff_info.name = new_name
+            db.add(staff_info)
+            staff_updated = True
+
+    # 4. 提交数据库事务
+    try:
+        if user_updated:
+            db.add(current_user)
+            
+        db.commit()
+        db.refresh(current_user)
+        
+    except Exception as e:
+        db.rollback()
+        raise BusinessException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="UPDATE_USER_FAILED",
+            message=f"更新用户信息失败: {str(e)}"
+        )
 
     return current_user

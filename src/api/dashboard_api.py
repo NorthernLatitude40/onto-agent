@@ -283,6 +283,7 @@ def get_current_shop_info(
         StaffModel.shop_id == target_shop_id,
         StaffModel.status == 1
     ).scalar() or 1
+    shop.staff_count = staff_count
 
     return shop
 

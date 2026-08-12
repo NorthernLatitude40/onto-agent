@@ -18,6 +18,7 @@ class UserResponse(BaseModel):
     id: int
     nickname: str
     role: str
+    phone: Optional[str] = None
     avatar_url: Optional[str] = None
     created_at: Optional[datetime] = None
 

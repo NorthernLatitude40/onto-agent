@@ -17,7 +17,7 @@ class User(Base):
     nickname = Column(String(64), default="微信用户")
     avatar_url = Column(String(255), default="")
     phone = Column(String(20), nullable=True)
-    role = Column(String(20), default=SystemRole.ADMIN.value, nullable=False) # 默认店员
+    role = Column(String(20), default=SystemRole.MERCHANT.value, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     is_active = Column(Boolean, default=True, comment="是否激活")
