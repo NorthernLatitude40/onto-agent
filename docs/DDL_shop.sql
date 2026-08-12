@@ -32,6 +32,10 @@ COMMENT ON COLUMN partner.payable_amount IS '当前应付款金额(元)';
 -- 2. 存货/设备/配件 库存表
 -- 支持：新机库存、二手机库存、配件库存、在库设备总值
 -- ========================================================
+-- Drop table
+
+-- DROP TABLE public.inventory;
+
 CREATE TABLE public.inventory (
 	id bigserial NOT NULL,
 	sn_code varchar(100) NULL DEFAULT NULL::character varying,
@@ -47,38 +51,71 @@ CREATE TABLE public.inventory (
 	created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	remark varchar(255) NULL DEFAULT NULL::character varying,
+	shop_id int4 NOT NULL,
 	CONSTRAINT inventory_pkey PRIMARY KEY (id),
 	CONSTRAINT inventory_sn_code_key UNIQUE (sn_code),
+	CONSTRAINT fk_inventory_shops FOREIGN KEY (shop_id) REFERENCES public.shops(id) ON DELETE CASCADE,
 	CONSTRAINT inventory_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.partner(id) ON DELETE SET NULL
 );
 CREATE INDEX idx_inventory_cat_status ON public.inventory USING btree (category, status);
+CREATE INDEX idx_inventory_shop_id ON public.inventory USING btree (shop_id);
 CREATE INDEX idx_inventory_supplier_id ON public.inventory USING btree (supplier_id);
 
+
 COMMENT ON TABLE inventory IS '库存物品表';
+
+COMMENT ON COLUMN public.inventory.id IS '主键ID（自动递增）';
+COMMENT ON COLUMN public.inventory.sn_code IS '序列号/SN码/IMEI码（唯一识别码）';
+COMMENT ON COLUMN public.inventory.title IS '设备/商品名称或标题（如：iPhone 15 Pro）';
+COMMENT ON COLUMN public.inventory.category IS '分类类型（如 1:新机, 2:二手机, 3:配件）';
+COMMENT ON COLUMN public.inventory.spec IS '规格描述/配置（如：256G 黑色 / 极佳）';
+COMMENT ON COLUMN public.inventory.purchase_price IS '回收/采购成本价（元）';
+COMMENT ON COLUMN public.inventory.selling_price IS '预售/标价/出货指导价（元）';
+COMMENT ON COLUMN public.inventory.stock_quantity IS '库存数量（设备通常为 1，配件可多件）';
+COMMENT ON COLUMN public.inventory.status IS '库存状态（如 1:在库/待售, 2:已售出, 3:维修复测中, 4:已退货）';
+COMMENT ON COLUMN public.inventory.supplier_id IS '关联供应商/回收来源ID（外键关联 partner 表）';
+COMMENT ON COLUMN public.inventory.in_stock_time IS '设备实际入库/收货时间';
+COMMENT ON COLUMN public.inventory.created_at IS '记录创建时间';
+COMMENT ON COLUMN public.inventory.updated_at IS '记录最近更新时间';
+COMMENT ON COLUMN public.inventory.remark IS '备注说明（如：微瑕、换过电池等细节）';
+COMMENT ON COLUMN public.inventory.shop_id IS '所属店铺ID（外键关联 shops 表，多店铺数据隔离）';
 
 -- ========================================================
 -- 3. 日常收付款流水表
 -- 支持：今日收入、今日支出、今日毛利计算
 -- ========================================================
-CREATE TABLE financial_record (
-  id BIGSERIAL PRIMARY KEY,
-  record_sn VARCHAR(64) NOT NULL UNIQUE, -- 流水单号
-  type SMALLINT NOT NULL, -- 类型：1-收入 2-支出
-  category VARCHAR(50) NOT NULL, -- 收支科目
-  amount NUMERIC(10,2) NOT NULL DEFAULT 0.00, -- 交易金额(元)
-  profit NUMERIC(10,2) NOT NULL DEFAULT 0.00, -- 产生毛利(元)
-  partner_id BIGINT DEFAULT NULL REFERENCES partner(id) ON DELETE SET NULL,
-  business_type SMALLINT DEFAULT 0, -- 关联业务类型：0-无 1-手机出库 2-配件出库 3-维修结算 4-挂账还款
-  business_id BIGINT DEFAULT NULL, -- 关联具体业务单据ID
-  payment_method VARCHAR(30) DEFAULT '微信',
-  record_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  remark VARCHAR(255) DEFAULT NULL,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+-- Drop table
 
-CREATE INDEX idx_financial_record_time ON financial_record(record_time);
-CREATE INDEX idx_financial_type_time ON financial_record(type, record_time);
-CREATE INDEX idx_financial_partner_id ON financial_record(partner_id);
+-- DROP TABLE public.financial_record;
+
+CREATE TABLE public.financial_record (
+	id bigserial NOT NULL,
+	record_sn varchar(64) NOT NULL,
+	"type" int2 NOT NULL,
+	category varchar(50) NOT NULL,
+	amount numeric(10, 2) NOT NULL DEFAULT 0.00,
+	profit numeric(10, 2) NOT NULL DEFAULT 0.00,
+	partner_id int8 NULL,
+	business_type int2 NULL DEFAULT 0,
+	business_id int8 NULL,
+	payment_method varchar(30) NULL DEFAULT '微信'::character varying,
+	record_time timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	remark varchar(255) NULL DEFAULT NULL::character varying,
+	created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	shop_id int4 NOT NULL,
+	device_sn_code varchar(100) NULL DEFAULT NULL::character varying,
+	CONSTRAINT financial_record_pkey PRIMARY KEY (id),
+	CONSTRAINT financial_record_record_sn_key UNIQUE (record_sn),
+	CONSTRAINT financial_record_partner_id_fkey FOREIGN KEY (partner_id) REFERENCES public.partner(id) ON DELETE SET NULL,
+	CONSTRAINT fk_financial_record_inventory FOREIGN KEY (device_sn_code) REFERENCES public.inventory(sn_code) ON DELETE SET NULL,
+	CONSTRAINT fk_financial_records_shops FOREIGN KEY (shop_id) REFERENCES public.shops(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_financial_device_sn ON public.financial_record USING btree (device_sn_code);
+CREATE INDEX idx_financial_partner_id ON public.financial_record USING btree (partner_id);
+CREATE INDEX idx_financial_record_time ON public.financial_record USING btree (record_time);
+CREATE INDEX idx_financial_shop_time ON public.financial_record USING btree (shop_id, record_time);
+CREATE INDEX idx_financial_type_time ON public.financial_record USING btree (type, record_time);
+
 
 COMMENT ON TABLE financial_record IS '日常收付款流水表';
 
