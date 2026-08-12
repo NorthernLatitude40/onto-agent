@@ -185,6 +185,10 @@ COMMENT ON TABLE outbound_order_item IS '出库订单明细表';
 -- ========================================================
 -- 7. user login
 -- ========================================================
+-- public.sys_user definition
+
+-- Drop table
+
 -- DROP TABLE public.sys_user;
 
 CREATE TABLE public.sys_user (
@@ -195,20 +199,25 @@ CREATE TABLE public.sys_user (
 	avatar_url varchar(255) NULL DEFAULT ''::character varying,
 	phone varchar(20) NULL DEFAULT NULL::character varying,
 	"role" varchar(20) NULL DEFAULT 'staff'::character varying,
-	is_active bool NULL DEFAULT true, -- ⬅️ 新增：账号状态 (true-正常, false-禁用)
 	created_at timestamptz NULL DEFAULT CURRENT_TIMESTAMP,
 	updated_at timestamptz NULL DEFAULT CURRENT_TIMESTAMP,
-	shop_id int4 NULL DEFAULT 1,
+	is_active bool NULL DEFAULT true, -- 账号状态：true-启用/激活，false-禁用
 	CONSTRAINT sys_user_openid_key UNIQUE (openid),
 	CONSTRAINT sys_user_pkey PRIMARY KEY (id)
 );
-
--- 创建索引与注释
 CREATE INDEX idx_user_openid ON public.sys_user USING btree (openid);
 
-COMMENT ON TABLE public.sys_user IS '系统用户/员工表';
-COMMENT ON COLUMN public.sys_user.is_active IS '账号状态：true-启用，false-禁用';
-COMMENT ON COLUMN public.sys_user.shop_id IS '关联店铺ID';
+-- Column comments
+
+COMMENT ON COLUMN public.sys_user.is_active IS '账号状态：true-启用/激活，false-禁用';
+
+-- Permissions
+
+ALTER TABLE public.sys_user OWNER TO postgres;
+GRANT ALL ON TABLE public.sys_user TO postgres;
+GRANT ALL ON TABLE public.sys_user TO anon;
+GRANT ALL ON TABLE public.sys_user TO authenticated;
+GRANT ALL ON TABLE public.sys_user TO service_role;
 
 -- ========================================================
 -- 8. shop

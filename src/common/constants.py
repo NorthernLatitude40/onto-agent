@@ -1,0 +1,3 @@
+# 常量配置
+JWT_ALGORITHM = "HS256"
+TOKEN_EXPIRE_HOURS = 24 * 7  # Token 有效期 7 天
