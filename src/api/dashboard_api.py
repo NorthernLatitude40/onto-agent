@@ -7,6 +7,7 @@ import re
 import hashlib
 import ast
 import jwt
+import httpx
 from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.orm import Session
@@ -547,13 +548,39 @@ def generate_invite(
     }
 
 # ==========================================
-# 接口 3: 受邀员工接受邀请并绑定 OpenID
+# 接口 3: 受邀员工接受邀请并绑定 OpenID, 大部分时候邀请时还未注册
 # ==========================================
+async def get_wx_openid_by_code(code: str) -> dict:
+    """使用小程序临时 code 向微信 API 换取 openid 和 session_key"""
+    # 从你的 settings/env 获取小程序的 AppID 和 AppSecret
+    appid = settings.WX_APP_ID
+    secret = settings.WX_APP_SECRET
+
+    url = "https://api.weixin.qq.com/sns/jscode2session"
+    params = {
+        "appid": appid,
+        "secret": secret,
+        "js_code": code,
+        "grant_type": "authorization_code",
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
+        data = response.json()
+
+    # 微信接口返回 errcode 不为 0 表示报错
+    if "errcode" in data and data["errcode"] != 0:
+        raise BusinessException(
+            status_code=400,
+            detail=f"微信登录失败: {data.get('errmsg', '未知错误')}",
+        )
+
+    return data  # 返回格式如: {"openid": "xxx", "session_key": "xxx"}
+
 @shop_router.post("/accept-invite")
 def accept_invite(
     req: AcceptInviteRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user) # current_user 是系统真正的 User 账号
+    db: Session = Depends(get_db)
 ):
     # 1. 解析 token (格式: INVITE_staffId_shopId_timestamp)
     try:
@@ -579,12 +606,36 @@ def accept_invite(
         raise BusinessException(status_code=400, detail="该邀请已被其他人使用")
 
     # ---------------------------------------------------------
-    # 3. 🌟 关键防御：防 uix_shop_user 数据库唯一键冲突
+    # Step 3: 用 code 向微信服务器换取 openid (核心逻辑)
+    # ---------------------------------------------------------
+    wx_res = get_wx_openid_by_code(
+        req.code
+    )  # 换取 openid 的封装函数 (调用微信 jscode2session 接口)
+    openid = wx_res.get("openid")
+
+    if not openid:
+        raise BusinessException(status_code=400, detail="微信登录凭证无效")
+
+    # ---------------------------------------------------------
+    # Step 4: 查找或自动注册用户 (User 表)
+    # ---------------------------------------------------------
+    user = db.query(User).filter(User.openid == openid).first()
+
+    if not user:
+        # 如果是第一次进来的新微信用户，自动创建账号
+        user = User(openid=openid, role=SystemRole.MERCHANT)
+        db.add(user)
+        db.flush()  # 拿到 user.id
+
+
+    # ---------------------------------------------------------
+    # 5. 🌟 关键防御：防 uix_shop_user 数据库唯一键冲突
     # ---------------------------------------------------------
     # 检查当前点击链接的用户，是否已经在该店铺拥有员工身份
     already_member = db.query(StaffModel).filter(
         StaffModel.shop_id == shop_id,
-        StaffModel.user_id == current_user.id
+        StaffModel.user_id == user.id,
+        StaffModel.id != staff_id
     ).first()
 
     if already_member:
@@ -594,20 +645,18 @@ def accept_invite(
             code="USER_ALREADY_MEMBER"
         )
 
-    # 3. 🌟 优雅绑定：将 current_user.id 关联到员工档案上
-    staff_profile.user_id = current_user.id
+    # 6. 🌟 优雅绑定：将 current_user.id 关联到员工档案上
+    staff_profile.user_id = user.id
     staff_profile.status = 1  # 激活状态
-
-    # (可选) 同步更新一下 current_user 的 shop_id，保持主表感知
-    current_user.shop_id = shop_id
+    staff_profile.shop_id = shop_id
 
     db.commit()
 
     # 4. 签发更新后的 Token
     new_token = create_access_token(data={
-        "sub": str(current_user.id),
+        "sub": str(user.id),
         "role": staff_profile.role,
-        "openid": current_user.openid
+        "openid": user.openid
     })
 
     return {
