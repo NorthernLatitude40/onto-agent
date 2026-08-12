@@ -28,6 +28,7 @@ class CreateInviteRequest(BaseModel):
 # 3. 员工接受邀请请求
 class AcceptInviteRequest(BaseModel):
     invite_token: str = Field(..., description="邀请Token")
+    code: str  # 微信小程序 wx.login() 获得的 code
 
 class UserOutSchema(BaseModel):
     id: int
