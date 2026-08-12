@@ -578,7 +578,7 @@ async def get_wx_openid_by_code(code: str) -> dict:
     return data  # 返回格式如: {"openid": "xxx", "session_key": "xxx"}
 
 @shop_router.post("/accept-invite")
-def accept_invite(
+async def accept_invite(
     req: AcceptInviteRequest,
     db: Session = Depends(get_db)
 ):
@@ -608,7 +608,7 @@ def accept_invite(
     # ---------------------------------------------------------
     # Step 3: 用 code 向微信服务器换取 openid (核心逻辑)
     # ---------------------------------------------------------
-    wx_res = get_wx_openid_by_code(
+    wx_res = await get_wx_openid_by_code(
         req.code
     )  # 换取 openid 的封装函数 (调用微信 jscode2session 接口)
     openid = wx_res.get("openid")
