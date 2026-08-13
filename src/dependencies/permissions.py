@@ -49,14 +49,23 @@ class ShopRoleChecker:
         self,
         # 1. 设置 Header 可选，默认值为 None
         shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
-        current_user: User = Depends(get_current_user),
+        sys_user: User = Depends(get_current_user),
         db: Session = Depends(get_db)
     ) -> Optional[StaffModel]:
         
+
         # 1. 如果是平台超管，直接放行
-        user_system_role = getattr(current_user, "system_role", getattr(current_user, "role", None))
+        user_system_role = getattr(sys_user, "system_role", getattr(sys_user, "role", None))
         if user_system_role == SystemRole.ADMIN.value or user_system_role == SystemRole.ADMIN:
-            return None
+            staff_relation = StaffModel(
+                    shop_id=DEFAULT_TEST_SHOP_ID,
+                    id=0,
+                    user_id=sys_user.id,
+                    name="admin",
+                    role=ShopRole.OWNER,
+                    status=1
+                )
+            return staff_relation
 
         # 🚀 2. 核心调整：如果前端没传 Header，固定使用测试店铺 ID (比如 1)
         target_shop_id = shop_id if shop_id is not None else DEFAULT_TEST_SHOP_ID
@@ -64,7 +73,7 @@ class ShopRoleChecker:
         # 3. 查询用户在该店铺下的具体角色
         staff_relation = db.query(StaffModel).filter(
             StaffModel.shop_id == target_shop_id,
-            StaffModel.user_id == current_user.id
+            StaffModel.user_id == sys_user.id
         ).first()
 
         # 4. 未绑定店铺或已禁用

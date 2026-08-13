@@ -3,6 +3,7 @@ from functools import lru_cache
 from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -36,6 +37,15 @@ class Settings(BaseSettings):
     WX_APP_ID: str | None = None
     WX_APP_SECRET: str | None = None
     JWT_SECRET_KEY: str = "change_this_to_a_secure_secret_in_prod"
+
+    # ----------------------------------------------------------------------
+    # 配置与路径常量（禁止硬编码本地绝对路径）
+    # ----------------------------------------------------------------------
+    BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
+    UPLOAD_DIR: Path = Path(os.getenv("UPLOAD_DIR", BASE_DIR / "uploads"))
+    EXPORTS_DIR: Path = Path(os.getenv("EXPORTS_DIR", BASE_DIR / "exports"))
+
+
 
     # --- Pydantic Settings 配置项 ---
     model_config = SettingsConfigDict(

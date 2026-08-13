@@ -2,16 +2,7 @@ from pydantic import BaseModel, ConfigDict
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
-class StaffResponse(BaseModel):
-    """创建/获取员工信息的返回数据结构 (Bare Payload)"""
-    id: int
-    nickname: str
-    role: str
-    status: int
-    is_active: bool = False
 
-    # 兼容 ORM 模型自动转换
-    model_config = ConfigDict(from_attributes=True)
 
 class UserResponse(BaseModel):
     """当前用户信息返回模型 (Bare Payload)"""

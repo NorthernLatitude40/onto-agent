@@ -6,6 +6,10 @@ from fastapi.responses import JSONResponse
 from src.model.rfc_7807_schema import ProblemDetails
 
 from src.common.i18n import get_i18n_message
+from src.common.logger import get_logger
+
+# ⚙️ 2. 获取当前模块的 logger
+logger = get_logger("API_SERVICE")
 
 
 # ==============================================================================
@@ -50,6 +54,7 @@ class UnauthorizedException(BusinessException):
 # ==============================================================================
 def register_exception_handlers(app: FastAPI) -> None:
 
+    # 1. 业务自定义异常（带国际化）
     @app.exception_handler(BusinessException)
     async def business_exception_handler(request: Request, exc: BusinessException):
         # 💡 从 Header 获取客户端语言
@@ -79,6 +84,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             media_type="application/problem+json",
         )
 
+    # 2. HTTP 显式异常（404、401、403 等框架或显式抛出的错误）
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
 
@@ -114,4 +120,24 @@ def register_exception_handlers(app: FastAPI) -> None:
                 exclude_none=True
             ),  # Pydantic v2 用 model_dump，v1 用 .dict()
             media_type="application/problem+json",
+        )
+
+    # 4. 终极兜底异常（未预期的系统崩溃，如 500 代码 Bug）
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        # 💡 在后台日志打印完整的堆栈信息，方便排查 Bug
+        logger.error(f"Unhandled Exception: {exc}", exc_info=True)
+        
+        # 💡 给前端返回通用的友好提示，隐藏真实堆栈
+        problem_details = ProblemDetails(
+            type="about:blank",
+            title="INTERNAL_SERVER_ERROR",
+            status=500,
+            detail="An unexpected internal error occurred. Please try again later.",
+            instance=str(request.url.path)
+        )
+        return JSONResponse(
+            status_code=500,
+            content=problem_details.model_dump(exclude_none=True),
+            media_type="application/problem+json"
         )

@@ -31,7 +31,7 @@ from src.api.auth_api import get_current_user, create_access_token
 from src.common.exceptions import BusinessException
 from src.config.config import settings
 from src.dependencies.permissions import allow_admin, allow_shop_manager, allow_shop_staff
-from src.model.response_models import StaffResponse
+from src.model.clark_schema import StaffResponse
 from src.model.dashboard_schema import DashboardOverviewResponse
 
 # 引入你的数据库连接、Session依赖与 ORM 模型
