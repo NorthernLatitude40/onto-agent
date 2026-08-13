@@ -10,28 +10,18 @@ import aiofiles
 from fastapi import APIRouter, FastAPI, File, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
+
 from pydantic import BaseModel, Field
 
 from src.common.exceptions import BusinessException, register_exception_handlers
 from src.core.shop_agent.system import ShopAgentSystem
 
+
+
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger("API_SERVICE")
 
 shop_agent = ShopAgentSystem()
-
-# ----------------------------------------------------------------------
-# 配置与路径常量（禁止硬编码本地绝对路径）
-# ----------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", BASE_DIR / "uploads"))
-EXPORTS_DIR = Path(os.getenv("EXPORTS_DIR", BASE_DIR / "exports"))
-
-# 确保必要的目录存在
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-
 
 # ----------------------------------------------------------------------
 # Dependencies & Helpers
@@ -170,43 +160,3 @@ async def deploy_canvas(graph_dto: dict, request: Request):
     return {"code": 200, "message": "画布编译并部署成功！", "data": None}
 
 
-# ----------------------------------------------------------------------
-# 工厂函数 (App Creator)
-# ----------------------------------------------------------------------
-def create_api(harness) -> FastAPI:
-    app = FastAPI(title="Agent Harness API Gateway")
-
-    # 1. 挂载全局 Harness 实例到 state，供 Depends 读取
-    app.state.worker = harness
-
-    # 2. 注册全局异常处理器
-    register_exception_handlers(app)
-
-    # 3. 动态配置 CORS 中间件（支持环境变量覆盖）
-    allowed_origins = os.getenv(
-        "CORS_ORIGINS", 
-        "http://localhost:5173,http://127.0.0.1:5173"
-    ).split(",")
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=allowed_origins if "*" not in allowed_origins else ["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # 4. 挂载静态文件导出目录
-    app.mount("/files", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
-
-    # 5. 挂载各模块路由
-    from src.api.auth_api import router as auth_router
-    from src.api.dashboard_api import dashboard_router, shop_router
-
-    app.include_router(router)
-    app.include_router(dashboard_router)
-    app.include_router(shop_router)
-    app.include_router(auth_router)
-
-    logger.info("✅ Agent Harness API Gateway 挂载完成")
-    return app

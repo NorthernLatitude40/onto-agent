@@ -5,6 +5,11 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from src.common.logger import setup_logging, get_logger
+from fastapi.staticfiles import StaticFiles
+from src.common.exceptions import BusinessException, register_exception_handlers
+from fastapi.middleware.cors import CORSMiddleware
+from src.config.config import settings
+from src.api.v1.router import api_v1_router
 
 # ⚙️ 1. 初始化全局统一日志（只在入口调用一次）
 setup_logging()
@@ -55,7 +60,6 @@ def create_app() -> FastAPI:
     App 工厂函数，将 AgentHarness 的初始化延迟到真正的 FastAPI lifespan 周期中，
     保障平滑启动与优雅停机（Graceful Shutdown）。
     """
-    from src.api.agent_api import create_api
     from src.core.harness import AgentHarness
 
     # 初始化 Worker 实例
@@ -84,6 +88,53 @@ def create_app() -> FastAPI:
     app = create_api(harness=worker)
     app.router.lifespan_context = lifespan
 
+    return app
+
+# ----------------------------------------------------------------------
+# 工厂函数 (App Creator)
+# ----------------------------------------------------------------------
+def create_api(harness) -> FastAPI:
+    app = FastAPI(title="Agent Harness API Gateway")
+
+    # 1. 挂载全局 Harness 实例到 state，供 Depends 读取
+    app.state.worker = harness
+
+    # 2. 注册全局异常处理器
+    register_exception_handlers(app)
+
+    # 3. 动态配置 CORS 中间件（支持环境变量覆盖）
+    allowed_origins = os.getenv(
+        "CORS_ORIGINS", 
+        "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins if "*" not in allowed_origins else ["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # 确保必要的目录存在
+    settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    settings.EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 4. 挂载静态文件导出目录
+    app.mount("/files", StaticFiles(directory=str(settings.EXPORTS_DIR)), name="exports")
+
+    # 5. 挂载各模块路由
+    from src.api.auth_api import router as auth_router
+    from src.api.dashboard_api import dashboard_router, shop_router
+    from src.api.agent_api import router
+
+    app.include_router(router)
+    app.include_router(api_v1_router)
+    app.include_router(dashboard_router)
+    app.include_router(shop_router)
+    app.include_router(auth_router)
+
+    logger.info("✅ Agent Harness API Gateway 挂载完成")
     return app
 
 
