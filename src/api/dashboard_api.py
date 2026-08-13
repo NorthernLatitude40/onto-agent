@@ -9,7 +9,7 @@ import ast
 import jwt
 import httpx
 from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
 from sqlalchemy.orm import Session
 from src.common.database import get_db # 获取数据库连接
 from src.service.inventory_service import InventoryService
@@ -44,7 +44,7 @@ from src.model.models import (
     Partner  # ⬅️ 必须显式 import 导入进来！
 )
 from src.common.redis_client import redis_client
-from src.model.inventory_schema import StockListResponse
+from src.model.inventory_schema import StockListResponse, SellDeviceResponse
 
 logger = logging.getLogger(__name__)
 
@@ -677,82 +677,134 @@ class ChatPayload(BaseModel):
 @shop_router.post("/chat")
 async def shop_chat(
     req: ChatPayload,
-    # 🌟 1. 从 请求头(Header) 中提取 X-Shop-Id，默认可以给 None 或 抛出异常
     x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id"),
-    # 🌟 2. 前端从 storage 拿到的 role，可以在请求头加一个 X-User-Role 传过来
-    x_user_role: Optional[str] = Header("staff", alias="X-User-Role")
+    x_user_role: Optional[str] = Header("staff", alias="X-User-Role"),
 ):
-    # 校验 shop_id 是否存在
-    if not x_shop_id:
-        raise HTTPException(status_code=400, detail="请求头缺少 X-Shop-Id")
-    # 🌟 3. 将提取到的 shop_id 和 role 塞进 LangGraph 的 configurable 字典中
-    config = {
-        "configurable": {
-            "thread_id": req.session_id or "default_session",
-            "shop_id": x_shop_id,       # 传入整数类型的 shop_id
-            "role": x_user_role,         # 传入角色（如 admin, staff）
-        }
-    }
-    
-    # 执行 Agent
-    result = await shop_agent.graph.ainvoke({"messages": [("user", req.message)]}, config)
-    messages = result["messages"]
-    last_msg = messages[-1]
-    
-    # 1. 提取 reply 文本
-    raw_content = last_msg.content or ""
-    if isinstance(raw_content, list):
-        text_parts = [b.get("text", "") if isinstance(b, dict) else str(b) for b in raw_content]
-        raw_content = "".join(text_parts)
-    elif not isinstance(raw_content, str):
-        raw_content = str(raw_content)
+  if not x_shop_id:
+    raise HTTPException(status_code=400, detail="请求头缺少 X-Shop-Id")
 
-    reply_text = raw_content
-    parsed_data = None
+  config = {
+      "configurable": {
+          "thread_id": req.session_id or "default_session",
+          "shop_id": x_shop_id,
+          "role": x_user_role,
+      }
+  }
 
-    # 2. 倒序查找【本次调用最新触发的 ToolMessage】
+  # 执行 Agent
+  result = await shop_agent.graph.ainvoke(
+      {"messages": [("user", req.message)]}, config
+  )
+  messages = result["messages"]
+  last_msg = messages[-1]
+
+  raw_content = last_msg.content or ""
+
+  # ---------------------------------------------------------
+  # 辅助函数：递归提取 JSON 对象（解决多重转义/套娃字符串）
+  # ---------------------------------------------------------
+  def extract_json_from_str(text_or_obj):
+    """把各种格式（包括 list、带 ```json 的字符串、嵌套 JSON 字符串）强行转为 dict"""
+    if isinstance(text_or_obj, dict):
+      return text_or_obj
+
+    if isinstance(text_or_obj, list):
+      combined_text = ""
+      for item in text_or_obj:
+        if isinstance(item, dict):
+          combined_text += item.get("text", "")
+        else:
+          combined_text += str(item)
+      return extract_json_from_str(combined_text)
+
+    if isinstance(text_or_obj, str):
+      clean_str = text_or_obj.strip()
+      # 贪婪匹配 JSON 结构
+      json_match = re.search(
+          r"```json\s*(\{.*\})\s*```", clean_str, re.DOTALL
+      ) or re.search(r"(\{.*\})", clean_str, re.DOTALL)
+      if json_match:
+        try:
+          return json.loads(json_match.group(1))
+        except Exception:
+          pass
+    return None
+
+  # ---------------------------------------------------------
+  # 🌟 步骤 1：【第一优先级】优先解包 LLM 产生的内层 JSON 结构！
+  # ---------------------------------------------------------
+  reply_text = ""
+  parsed_data = None
+
+  llm_json = extract_json_from_str(raw_content)
+
+  if isinstance(llm_json, dict) and "reply" in llm_json:
+    # 拿到外层的 reply
+    reply_text = llm_json.get("reply", "")
+    parsed_data = llm_json.get("parsedData", None)
+
+    # 🌟 关键点：如果内层 reply 依然是个 JSON 字符串，再解一次包！
+    inner_json = extract_json_from_str(reply_text)
+    if isinstance(inner_json, dict) and "reply" in inner_json:
+      reply_text = inner_json.get("reply", "")
+      # 如果内层解析出了更好的 parsedData (如 urn:error)，覆盖它
+      if inner_json.get("parsedData"):
+        parsed_data = inner_json.get("parsedData")
+
+  # ---------------------------------------------------------
+  # 🌟 步骤 2：【第二优先级】如果 LLM 没提供 parsedData，再去拿 ToolMessage
+  # ---------------------------------------------------------
+  if not parsed_data:
     for msg in reversed(messages):
-        # 如果在倒序遍历过程中先碰到了用户输入的消息，说明已经退出了本次对话的范围，直接停止查找
-        if getattr(msg, "type", None) == "user" or msg.__class__.__name__ == "HumanMessage":
-            break
+      if (
+          getattr(msg, "type", None) == "user"
+          or msg.__class__.__name__ == "HumanMessage"
+      ):
+        break
 
-        # 寻找 ToolMessage（工具返回的结果）
-        if getattr(msg, "type", None) == "tool" or msg.__class__.__name__ == "ToolMessage":
-            content = getattr(msg, "content", None)
-            
-            if isinstance(content, dict):
-                parsed_data = content
-            elif isinstance(content, str) and content.strip():
-                try:
-                    # 优先用标准 JSON 反序列化
-                    parsed_data = json.loads(content)
-                except Exception:
-                    try:
-                        # 兜底用 ast 安全解析 Python 字典字符串格式
-                        parsed_data = ast.literal_eval(content)
-                    except Exception:
-                        pass
-            
-            # 只要找到了本次对话最新的 Tool 结果（不论是 query_stock 还是 query_report），就立即跳出循环
-            if parsed_data:
-                break
-
-    # 3. 兜底：如果 ToolMessage 里没拿到，再尝试从 last_msg 的 json 格式或 tool_calls 提取
-    if not parsed_data:
-        json_match = re.search(r'```json\s*(\{.*?\})\s*```', raw_content, re.DOTALL) or \
-                     re.search(r'(\{.*?\})', raw_content, re.DOTALL)
-        if json_match:
+      if (
+          getattr(msg, "type", None) == "tool"
+          or msg.__class__.__name__ == "ToolMessage"
+      ):
+        content = getattr(msg, "content", None)
+        if isinstance(content, dict):
+          parsed_data = content
+        elif isinstance(content, str) and content.strip():
+          try:
+            parsed_data = json.loads(content)
+          except Exception:
             try:
-                data = json.loads(json_match.group(1))
-                reply_text = data.get("reply", reply_text)
-                parsed_data = data.get("parsedData", data)
+              parsed_data = ast.literal_eval(content)
             except Exception:
-                pass
+              pass
+        if parsed_data:
+          break
 
-    return {
-        "reply": reply_text,
-        "parsedData": parsed_data
-    }
+  # 如果 reply_text 没拿到，兜底为 raw_content
+  if not reply_text:
+    reply_text = (
+        raw_content if isinstance(raw_content, str) else str(raw_content)
+    )
+
+  # ---------------------------------------------------------
+  # 🌟 步骤 3：【防御拦截】消除非法卡片 (设备ID为空的情况)
+  # ---------------------------------------------------------
+  if parsed_data and isinstance(parsed_data, dict):
+    # 如果 action 是 sell 且 device_id 为 None，说明大模型在没有指定设备 ID 的情况下盲目发了卡片
+    if (
+        parsed_data.get("action") == "sell"
+        and parsed_data.get("device_id") is None
+    ):
+      # 1. 扔掉这个无意义的 parsedData，防止前端渲染出无法出库的卡片
+      parsed_data = None
+      # 2. 如果提示语不够明确，提示用户补全 ID
+      if "请提供" not in reply_text and "哪一台" not in reply_text:
+        reply_text += " （请补充具体要出售的设备 ID）"
+
+  # ---------------------------------------------------------
+  # 4. 返回给前端
+  # ---------------------------------------------------------
+  return {"reply": reply_text, "parsedData": parsed_data}
 
 class AddDeviceConfirmPayload(BaseModel):
     model: str = Field(..., description="设备型号，如：iPhone 13 128G")
@@ -893,130 +945,153 @@ def clean_device_model(model_str: str, db_session, shop_id: int) -> str:
 
     return cleaned
 
-@shop_router.post("/device/sell", summary="确认设备出售出库")
-async def confirm_sell_device(
-    payload: SellDeviceConfirmPayload, 
-    db: Session = Depends(get_db),
-    # 🌟 提取请求头里的 X-Shop-Id
-    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id")
-):
 
-    # 🌟 校验 shop_id，如果没传或者拿不到直接拦住，避免抛 500 报错
+@shop_router.post(
+    "/device/sell",
+    response_model=SellDeviceResponse,  # 🌟 直接指定 Bare Payload 的 Pydantic Response 模型
+    status_code=status.HTTP_200_OK,
+    summary="确认设备出售出库",
+)
+async def confirm_sell_device(
+    request: Request,
+    payload: SellDeviceConfirmPayload,
+    db: Session = Depends(get_db),
+    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id"),
+):
+    # ---------------------------------------------------------
+    # 1. Header 校验：缺失直接抛出 BusinessException
+    # ---------------------------------------------------------
     if not x_shop_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="缺少必要参数：请求头中未包含 X-Shop-Id"
+        raise BusinessException(
+            code="MISSING_SHOP_ID",
+            detail="缺少必要参数：请求头中未包含 X-Shop-Id",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            type_url="https://api.yourdomain.com/errors/missing-shop-id",
         )
 
-    #2. 在你的 sell_device 处理函数里调用：
     real_model = clean_device_model(payload.model, db, x_shop_id)
 
-    # 1. 简易 Redis 防重锁 (修改 key 前缀为 sell)
-    raw_str = f"sell_{real_model}_{payload.price}_{payload.notes}"
+    # ---------------------------------------------------------
+    # 2. 幂等防重锁 (结合店铺隔离)
+    # ---------------------------------------------------------
+    raw_str = f"sell_{x_shop_id}_{real_model}_{payload.price}_{payload.notes}"
     lock_key = f"lock:device_sell:{hashlib.md5(raw_str.encode()).hexdigest()}"
     is_locked = redis_client.set(lock_key, "locked", ex=5, nx=True)
 
     if not is_locked:
-        raise HTTPException(
+        raise BusinessException(
+            code="DUPLICATE_REQUEST",
+            detail="请勿重复提交！正在处理中...",
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请勿重复提交！正在处理中..."
+            type_url="https://api.yourdomain.com/errors/duplicate-request",
         )
 
     try:
-        # 2. 查找待售设备
+        # ---------------------------------------------------------
+        # 3. 🛡️ 悲观排他锁 (SELECT ... FOR UPDATE) 防并发超卖
+        # ---------------------------------------------------------
         query = db.query(InventoryModel).filter(
             InventoryModel.status == 1,
             InventoryModel.shop_id == x_shop_id,
-            InventoryModel.stock_quantity > 0
+            InventoryModel.stock_quantity > 0,
         )
-        if real_model.isdigit():
-            device = query.filter(InventoryModel.id == int(real_model)).first()
-        else:
-            device = query.filter(InventoryModel.title.ilike(f"%{real_model}%")).first()
 
-        if not device:
-            raise HTTPException(
+        if real_model.isdigit():
+            query = query.filter(InventoryModel.id == int(real_model))
+        else:
+            query = query.filter(InventoryModel.title.ilike(f"%{real_model}%"))
+
+        # 锁定选中行记录
+        device = query.with_for_update().first()
+
+        # 双重校验：避免排队等待锁出来后库存已被上一事务扣完
+        if not device or device.stock_quantity <= 0:
+            raise BusinessException(
+                code="DEVICE_NOT_FOUND_OR_SOLD",
+                detail=f"未在库存中找到可售设备或已被抢先售出：'{real_model}'",
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"未在库存中找到待售设备：'{real_model}'"
+                type_url="https://api.yourdomain.com/errors/device-not-found",
             )
 
-        # 3. 计算金额
+        # ---------------------------------------------------------
+        # 4. 核心逻辑：计算金额与安全扣减库存
+        # ---------------------------------------------------------
         cost_price = float(device.purchase_price or 0)
         sell_price = payload.price
         profit = sell_price - cost_price
 
-        # 4. 扣减库存
         device.stock_quantity -= 1
         if device.stock_quantity <= 0:
             device.stock_quantity = 0
             device.status = 2  # 已出库
 
-        # ----------------------------------------------------
-        # 🌟 核心规范修改 1：写入 OutboundOrder (出库主单)
-        # ----------------------------------------------------
-        order_sn = f"OUT_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:6].upper()}"
+        # ---------------------------------------------------------
+        # 5. 写入出库单、明细及财务流水
+        # ---------------------------------------------------------
+        order_sn = (
+            f"OUT_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:6].upper()}"
+        )
         outbound_order = OutboundOrder(
             order_sn=order_sn,
             total_amount=sell_price,
             created_at=datetime.now(),
-            shop_id=x_shop_id
+            shop_id=x_shop_id,
         )
         db.add(outbound_order)
-        db.flush()  # 刷入数据库以获取 outbound_order.id
+        db.flush()
 
-        # ----------------------------------------------------
-        # 🌟 核心规范修改 2：写入 OutboundOrderItem (出库明细)
-        # ----------------------------------------------------
         order_item = OutboundOrderItem(
             outbound_order_id=outbound_order.id,
             inventory_id=device.id,
             quantity=1,
-            purchase_price=cost_price,  # 🌟 这里改为 purchase_price
-            selling_price=sell_price,   # 实际成交单价
-            profit=profit               # 单项毛利
+            purchase_price=cost_price,
+            selling_price=sell_price,
+            profit=profit,
         )
         db.add(order_item)
 
-        # ----------------------------------------------------
-        # 🌟 核心规范修改 3：写入 FinancialRecord (财务流水)
-        # ----------------------------------------------------
         financial_record = FinancialRecord(
             record_sn=f"INC_{order_sn}",
-            type=1,  # 收入
+            type=1,
             category="手机销售",
             amount=sell_price,
             profit=profit,
             business_type=1,
-            business_id=outbound_order.id,  # 此时关联的是出库单 ID
+            business_id=outbound_order.id,
             payment_method=payload.payment_method,
             remark=f"设备出售出库：{device.title} | 订单号:{order_sn}",
             shop_id=x_shop_id,
-            device_sn_code=device.sn_code
+            device_sn_code=device.sn_code,
         )
         db.add(financial_record)
 
-        # 5. 提交事务
+        # 提交事务并释放行锁
         db.commit()
 
-        return {
-            "code": 200,
-            "message": "设备出售成功！已生成出库单与财务记账。",
-            "data": {
-                "id": device.id,
-                "model": device.title,
-                "order_sn": order_sn,
-                "sell_price": sell_price,
-                "profit": profit
-            }
-        }
+        # ---------------------------------------------------------
+        # 6. 🌟 Bare Payload 模式：直接返回 Schema 对象或裸字典
+        # ---------------------------------------------------------
+        return SellDeviceResponse(
+            id=device.id,
+            model=device.title,
+            order_sn=order_sn,
+            sell_price=sell_price,
+            profit=profit,
+        )
 
-    except HTTPException:
+    except BusinessException:
+        db.rollback()
         raise
+
     except Exception as e:
         db.rollback()
-        redis_client.delete(lock_key)
-        logger.exception("【API 错误】设备确认出售失败:")
-        raise HTTPException(
+        logger.exception("【系统错误】设备确认出售失败:")
+        raise BusinessException(
+            code="INTERNAL_SERVER_ERROR",
+            detail=f"服务器内部数据错误: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"出售失败: {str(e)}"
+            type_url="https://api.yourdomain.com/errors/internal-server-error",
         )
+
+    finally:
+        redis_client.delete(lock_key)
