@@ -24,6 +24,7 @@ from src.model.tools_schema import QueryShopDataInput
 from langchain_core.tools import tool, InjectedToolArg
 from typing import Optional, Annotated
 from langchain_core.runnables import RunnableConfig
+from src.model.rfc_7807_schema import ProblemDetails
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,15 +49,22 @@ class AddDeviceInput(BaseModel):
     )
 
 
+# 1. 重新设计入参 Schema：区分 device_id 与 model
 class SellDeviceInput(BaseModel):
-    model_or_id: str = Field(
-        description="要出售的手机型号或设备ID，例如：iPhone 13 128G 或 15"
+    device_id: Optional[int] = Field(
+        default=None,
+        description="要出售的设备唯一ID（如果是数字ID优先填这里），例如：23",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="要出售的手机型号名称（如果已知名称填这里），例如：iPhone 13 128G 或 xiaomi8",
     )
     sell_price: float = Field(
         description="实际卖出/成交价格（纯数字，单位元），例如：2500"
     )
     payment_method: Optional[str] = Field(
-        default="微信", description="客户付款方式，如：微信、支付宝、现金、刷卡"
+        default="微信",
+        description="客户付款方式，如：微信、支付宝、现金、刷卡",
     )
     notes: Optional[str] = Field(
         default="二手销售", description="销售备注或客户信息"
@@ -84,23 +92,87 @@ def add_device(model: str, cost_price: float, color: str = "未知", notes: str 
 
 # 2. 设备出售/开单解析 Tool
 @tool("sell_device", args_schema=SellDeviceInput)
-def sell_device(model_or_id: str, sell_price: float, payment_method: str = "微信", notes: str = "二手销售") -> dict:
+def sell_device(
+    sell_price: float,
+    device_id: Optional[int] = None,
+    model: Optional[str] = None,
+    payment_method: str = "微信",
+    notes: str = "二手销售",
+    db_session=None,
+) -> dict:
+    """出售/开单/出库某台手机设备。
+
+    当用户表达卖出、售出、开单、出库设备时调用此工具。
     """
-    用于识别用户出售/开单/销售设备的意图并提取参数。
-    当用户说“卖了/出售/开单/出库某台手机”时，必须调用此工具提取参数。
-    """
+    final_device_id = device_id
+    final_model_name = model
+
+    # 1. 纯数字纠正为 ID
+    if final_model_name and str(final_model_name).isdigit() and not final_device_id:
+        final_device_id = int(final_model_name)
+        final_model_name = None
+
+    # 2. 数据库查询逻辑
+    if db_session:
+        query = db_session.query(InventoryModel).filter(InventoryModel.status == 1)
+        
+        # 场景 A: 按 ID 精确查询
+        if final_device_id:
+            device = query.filter(InventoryModel.id == final_device_id).first()
+            if not device:
+                # 🛑 异常 1：设备未找到 (404) -> 返回 RFC 7807 结构
+                return ProblemDetails(
+                    type="urn:error:device-not-found",
+                    title="Device Not Found",
+                    status=404,
+                    detail=f"在库中未找到 ID 为 {final_device_id} 的设备，可能已出售或未入库。",
+                    extensions={"queried_id": final_device_id}
+                ).model_dump(exclude_none=True),  # Pydantic v2 用 model_dump，v1 用 .dict()
+            
+            final_model_name = device.title
+            
+        # 场景 B: 按名称模糊查询 (用户只说了型号没说 ID)
+        elif final_model_name:
+            devices = query.filter(InventoryModel.title.ilike(f"%{final_model_name}%")).all()
+            
+            if not devices:
+                # 🛑 异常 2：设备未找到 (404)
+                return ProblemDetails(
+                    type="urn:error:device-not-found",
+                    title="Device Not Found",
+                    status=404,
+                    detail=f"未找到型号包含 '{final_model_name}' 的在库设备。",
+                    extensions={"queried_model": final_model_name}
+                ).dict(exclude_none=True)
+                
+            if len(devices) > 1:
+                # 🛑 异常 3：多台匹配，产生歧义，需要用户澄清 (409 冲突 或 300 多项选择)
+                candidates = [{"id": d.id, "title": d.title, "cost": d.cost} for d in devices]
+                return ProblemDetails(
+                    type="urn:error:multiple-devices-found",
+                    title="Multiple Devices Found",
+                    status=409,
+                    detail=f"找到 {len(devices)} 台匹配的设备，请用户明确指定其中一台的 ID。",
+                    extensions={"candidates": candidates} # 利用扩展字段把候选项传给 LLM/前端
+                ).model_dump(exclude_none=True),  # Pydantic v2 用 model_dump，v1 用 .dict()
+            
+            # 唯一匹配
+            final_device_id = devices[0].id
+            final_model_name = devices[0].title
+
+    # 3. 正常成功路径 (保留你原本的 UI 解析卡片结构)
     return {
-        "status": "parsed",
+        "status": "parsed",  # 明确标识这是正常的卡片数据
         "type": "out",
         "action": "sell",
-        "model": model_or_id,
+        "device_id": final_device_id,
+        "model": final_model_name,
         "price": sell_price,
-        "model_or_id": model_or_id,
         "sell_price": sell_price,
         "payment_method": payment_method,
-        "notes": notes
+        "notes": notes,
+        "is_pronoun": False,
     }
-
 
 # ==========================================
 # 二、 统一数据查询万能工具 (Fat Query Tool)

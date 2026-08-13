@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.responses import JSONResponse
+from src.model.rfc_7807_schema import ProblemDetails
 
 from src.common.i18n import get_i18n_message
 
@@ -61,47 +62,56 @@ def register_exception_handlers(app: FastAPI) -> None:
             fallback_detail=exc.detail
         )
 
-        problem_details = {
-            "type": exc.type_url,
-            "title": exc.code,
-            "status": exc.status_code,
-            "detail": localized_detail,  # 输出自动翻译后的结果
-            "instance": str(request.url.path),
-            **exc.extra
-        }
+        problem_details = ProblemDetails(
+            type=exc.type_url,
+            title=exc.code,
+            status=exc.status_code,
+            detail=localized_detail,  # 输出自动翻译后的结果
+            instance=str(request.url.path),
+            **exc.extra  # 或 extensions=exc.extra
+        )
+
         return JSONResponse(
             status_code=exc.status_code,
-            content=problem_details,
-            headers={"Content-Type": "application/problem+json"}
+            content=problem_details.model_dump(
+                exclude_none=True
+            ),  # Pydantic v2 用 model_dump，v1 用 .dict()
+            media_type="application/problem+json",
         )
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
-        problem_details = {
-            "type": "about:blank",
-            "title": "HTTP_ERROR",
-            "status": exc.status_code,
-            "detail": exc.detail,
-            "instance": str(request.url.path),
-        }
+
+        problem_details = ProblemDetails(
+            type="about:blank",
+            title="HTTP_ERROR",
+            status=exc.status_code,
+            detail=exc.detail,
+            instance=str(request.url.path)
+        )
         return JSONResponse(
             status_code=exc.status_code,
-            content=problem_details,
-            headers={"Content-Type": "application/problem+json"}
+            content=problem_details.model_dump(
+                exclude_none=True
+            ),  # Pydantic v2 用 model_dump，v1 用 .dict()
+            media_type="application/problem+json",
         )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        problem_details = {
-            "type": "about:blank",
-            "title": "VALIDATION_ERROR",
-            "status": status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "detail": "Input validation failed.",
-            "instance": str(request.url.path),
-            "invalid_params": exc.errors()
-        }
+
+        problem_details = ProblemDetails(
+            type="about:blank",
+            title="VALIDATION_ERROR",
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Input validation failed.",
+            instance=str(request.url.path),
+            invalid_params=exc.errors()
+        )
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=problem_details,
-            headers={"Content-Type": "application/problem+json"}
+            status_code=exc.status_code,
+            content=problem_details.model_dump(
+                exclude_none=True
+            ),  # Pydantic v2 用 model_dump，v1 用 .dict()
+            media_type="application/problem+json",
         )
