@@ -37,12 +37,18 @@ class UpdateShopPayload(BaseModel):
 # ==============================================================================
 # 3. 店铺响应 Schema (Response)
 # ==============================================================================
-class ShopResponse(BaseModel):
-    """当前店铺信息响应模型 (Bare Payload)"""
+# 1. 簡化版模型（基礎模型）
+class ShopSimpleResponse(BaseModel):
     id: int
-    owner_id: int
     name: str
-    logo: Optional[str] = ""
+    logo: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+# 2. 完整版模型（繼承 ShopSimpleResponse）
+class ShopResponse(ShopSimpleResponse):
+    """当前店铺信息响应模型 (Bare Payload)"""
+    owner_id: int
     contact_name: Optional[str] = ""
     contact_phone: Optional[str] = ""
     province: Optional[str] = ""
@@ -53,4 +59,5 @@ class ShopResponse(BaseModel):
     is_active: bool
     created_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    # 隱式繼承了父類別的 model_config = ConfigDict(from_attributes=True)
+    # 不用再重複撰寫！

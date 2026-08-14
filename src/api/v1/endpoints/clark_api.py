@@ -53,25 +53,20 @@ def create_staff(
 
     shop_id = int(x_shop_id)
 
-    # (可选增强) 校验当前管理员是否有权操作传入的这个 shop_id
-    # 如果管理员的账号有绑定 shop_id，且与 Header 不一致，可以阻断非法越权
-    if hasattr(current_user, 'shop_id') and current_user.shop_id and current_user.shop_id != shop_id:
-        raise BusinessException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="您无权管理该店铺的员工档案"
-        )
-
     # ---------------------------------------------------------
-    # 2. 🛡️ 双重防御：防 NULL 逻辑漏洞（代码层防护）
+    # 2. 🛡️ 重名校验：精准限制在【当前店铺】范围内查重
     # ---------------------------------------------------------
-    # 检查当前店铺下是否已经存在“同名”的在职员工或待认领档案
-    existing_staff = db.query(StaffModel).filter(
+    # 🌟 关键修复：status 字段属于 ShopStaffModel，使用 ShopStaffModel.status 过滤
+    existing_relation = db.query(ShopStaffModel).join(
+        StaffModel, ShopStaffModel.staff_id == StaffModel.id
+    ).filter(
+        ShopStaffModel.shop_id == shop_id,
         StaffModel.name == req.nickname,
-        StaffModel.status.in_([0, 1])  # 0: 待认领, 1: 正常在职 (过滤掉 2: 已离职/禁用)
+        ShopStaffModel.status.in_([0, 1])  # 0: 待认领, 1: 正常在职 (过滤掉 2: 已离职/禁用)
     ).first()
 
-    if existing_staff:
-        status_text = "待接受邀请" if existing_staff.status == 0 else "在职"
+    if existing_relation:
+        status_text = "待接受邀请" if existing_relation.status == 0 else "在职"
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"店铺内已存在名为 '{req.nickname}' 的{status_text}员工，请勿重复创建"
@@ -84,39 +79,39 @@ def create_staff(
     staff_role = req.role.value if hasattr(req.role, 'value') else req.role
 
     try:
-        # 步驟 1：創建員工個人檔案 (表 1: staff)
+        # 步骤 1：创建员工个人档案 (表 1: staff)
         new_staff = StaffModel(
-            user_id=None,                 # 未接受邀請前為 None
-            name=req.nickname             # 員工姓名/備註
+            user_id=None,                 # 未接受邀请前为 None
+            name=req.nickname             # 员工姓名/备注
         )
         db.add(new_staff)
-        db.flush()  # 💡 刷新事務，提前獲取 new_staff.id，但先不 commit
+        db.flush()  # 💡 刷新事务，提前获取 new_staff.id
 
-        # 步驟 2：創建店鋪與員工的綁定關係 (表 2: shop_staff)
+        # 步骤 2：创建店铺与员工的绑定关系 (表 2: shop_staff)
         new_shop_staff_relation = ShopStaffModel(
-            shop_id=shop_id,              # 從 Header 或 Context 傳進來的 shop_id
-            staff_id=new_staff.id,        # 關聯剛剛創建的 staff.id
-            role=staff_role,              # 員工在該店的角色
-            status=0                      # 0: 待認領/待接受邀請
+            shop_id=shop_id,              # 从 Header 传进来的 shop_id
+            staff_id=new_staff.id,        # 关联刚刚创建的 staff.id
+            role=staff_role,              # 员工在该店的角色
+            status=0                      # 0: 待认领/待接受邀请
         )
         db.add(new_shop_staff_relation)
 
-        # 步驟 3：一次性提交事務 (保證原子性，要麼都成功，要麼都失敗)
+        # 步骤 3：一次性提交事务 (保证原子性)
         db.commit()
         db.refresh(new_staff)
         db.refresh(new_shop_staff_relation)
 
-    except IntegrityError as e:
+    except IntegrityError:
         db.rollback()
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="創建失敗，員工數據或關聯重複"
+            detail="创建失败，员工数据或关联重复"
         )
     except Exception as e:
         db.rollback()
         raise BusinessException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="系統異常，創建員工失敗"
+            detail=f"系统异常，创建员工失败: {str(e)}"
         )
 
     # ---------------------------------------------------------
@@ -220,7 +215,7 @@ def update_staff(
 # ──────── 🌟 2：查询店铺下所有关联员工 ────────
 @router.get("", summary="查询店铺下关联的所有员工")
 def get_staff_list(
-    shop_id: Optional[int] = Query(None, description="需要查询的目标店铺ID"),
+    x_shop_id: int = Header(..., alias="X-Shop-Id"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -234,23 +229,33 @@ def get_staff_list(
     is_super_admin = getattr(current_user, "role", None) == ShopRole.OWNER.value
 
     # 1. 确定最终生效的 shop_id
-    target_shop_id = getattr(current_user, "shop_id", 1)
+    staff_relation = db.query(ShopStaffModel).filter(
+        ShopStaffModel.shop_id == x_shop_id,
+        ShopStaffModel.staff_id == current_user.id
+    ).first()
+    
+    if not staff_relation:
+        raise BusinessException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="您无权管理该店铺的员工档案"
+        )
+    target_shop_id = x_shop_id
 
     if is_super_admin:
         if is_production:
             # 🛑 生产线上环境：严禁超管越权穿透，直接抛出权限异常或限制只能看自己的
-            if shop_id and shop_id != target_shop_id:
+            if x_shop_id and x_shop_id != target_shop_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="线上生产环境禁止超级管理员越权跨店查看客户员工数据！"
                 )
         else:
             # 🟢 开发/测试环境：允许超管自由穿透传入 shop_id 测试
-            if shop_id:
-                target_shop_id = shop_id
+            if x_shop_id:
+                target_shop_id = x_shop_id
     else:
         # 普通店员/店长：强行限制只能查自己所在店铺
-        if shop_id and shop_id != target_shop_id:
+        if x_shop_id and x_shop_id != target_shop_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="您无权查看非本店铺的员工信息！"
