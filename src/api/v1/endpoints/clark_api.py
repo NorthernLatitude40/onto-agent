@@ -428,11 +428,12 @@ async def accept_invite(
         db.flush()
 
     # 獲取或懶加載建立 StaffProfile
-    staff_profile = db.query(StaffModel).filter(StaffModel.user_id == user.id).first()
-    if not staff_profile:
+    staff_profile = db.query(StaffModel).filter(StaffModel.id == target_staff_id).first()
+    if staff_profile:
         staff_profile = StaffModel(
             user_id=user.id,
-            name=f"店員_{user.id}"
+            status=1,
+            shop_id=target_shop_id
         )
         db.add(staff_profile)
         db.flush()
