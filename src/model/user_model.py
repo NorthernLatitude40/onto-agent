@@ -21,3 +21,6 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     is_active = Column(Boolean, default=True, comment="是否激活")
+
+    # 顯式指定名稱為 staff_profiles（避免與現有的 staff 欄位衝突）
+    staff_profiles = relationship("StaffModel", back_populates="user", uselist=False)

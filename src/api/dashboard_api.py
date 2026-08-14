@@ -33,6 +33,8 @@ from src.config.config import settings
 from src.dependencies.permissions import allow_admin, allow_shop_manager, allow_shop_staff
 from src.model.clark_schema import StaffResponse
 from src.model.dashboard_schema import DashboardOverviewResponse
+from src.common.i18n import ErrorCode, get_i18n_message
+from src.model.shop_staff_model import ShopStaffModel
 
 # 引入你的数据库连接、Session依赖与 ORM 模型
 from src.common.database import get_db
@@ -123,353 +125,13 @@ def get_dashboard_overview(
         "in_stock_devices": int(in_stock_count)
     }
 
-# ====================================================
-# 1. 确认入库 API (请求体 & 路由接口)
-# ====================================================
+
+
+
+
+
 
 shop_router = APIRouter(prefix="/api/v1/shop", tags=["店铺业务"])
-
-# ====================================================
-# 店铺与员工管理 API 路由
-# ====================================================
-
-# ──────── 商家自主开店/创建店铺 API ────────
-@shop_router.post("/create", response_model=ShopResponse, status_code=status.HTTP_201_CREATED, summary="创建店铺")
-def create_shop(
-    payload: CreateShopPayload,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    方案 B - 商家自主开店逻辑：
-    1. 在 shops 表插入新店铺记录
-    2. 将当前登录用户绑定到该店铺 (user.shop_id = new_shop.id)
-    3. 自动将该用户角色升级为店铺管理员/店长 (UserRole.ADMIN)
-    """
-    # 1. 确定 owner_id：如果未传，默认为当前登录用户
-    owner_id = payload.owner_id or current_user.id
-
-    try:
-        # 2. 落库创建店铺
-        new_shop = ShopModel(
-            name=payload.name,
-            logo=payload.logo,
-            contact_name=payload.contact_name,
-            contact_phone=payload.contact_phone,
-            province=payload.province,
-            city=payload.city,
-            district=payload.district,
-            address_detail=payload.address_detail,
-            is_active=True
-        )
-        db.add(new_shop)
-        db.flush()  # 获取自动生成的 new_shop.id
-
-        # 3. 绑定用户并升级为该店铺的创建者/店长
-        current_user.shop_id = new_shop.id
-        current_user.role = ShopRole.OWNER
-
-        db.commit()
-        db.refresh(new_shop)
-
-        return new_shop
-
-    except Exception as e:
-        db.rollback()
-        logger.exception("【API 错误】创建店铺失败:")
-        raise BusinessException(message="创建店铺失败", code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-# ──────── 修改店铺信息 API ────────
-@shop_router.put("/update", summary="修改店铺信息")
-def update_shop_info(
-    payload: UpdateShopPayload,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    修改店铺信息接口：
-    - 仅允许店长/管理员 (UserRole.ADMIN 或 role == 'admin') 修改
-    - 普通员工越权修改将直接被拒绝
-    """
-    user_role = str(getattr(current_user, "role", "staff")).lower()
-    if user_role not in ["admin", "manager"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="只有店长/管理员才有权限修改店铺信息！"
-        )
-
-    # 确定目标店铺 ID（默认修改用户当前绑定的店铺）
-    target_shop_id = payload.shop_id or getattr(current_user, "shop_id", 1)
-
-    # 跨店修改鉴权：防止修改其他店铺
-    if payload.shop_id and payload.shop_id != getattr(current_user, "shop_id", 1):
-        if user_role != "admin":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="您无权修改其他店铺的信息！"
-            )
-
-    shop = db.query(ShopModel).filter(ShopModel.id == target_shop_id).first()
-    if not shop:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="未找到对应店铺，无法修改！"
-        )
-
-    # 动态更新非空字段
-    update_data = payload.model_dump(exclude_unset=True, exclude={"shop_id"})
-    for key, value in update_data.items():
-        if value is not None:
-            setattr(shop, key, value)
-
-    try:
-        db.commit()
-        db.refresh(shop)
-        return {
-            "code": 200,
-            "message": "店铺信息更新成功！",
-            "data": {
-                "id": shop.id,
-                "name": shop.name,
-                "logo": shop.logo,
-                "contact_name": shop.contact_name,
-                "contact_phone": shop.contact_phone,
-                "address": f"{shop.province or ''}{shop.city or ''}{shop.district or ''}{shop.address_detail or ''}"
-            }
-        }
-    except Exception as e:
-        db.rollback()
-        logger.exception("【API 错误】修改店铺信息失败:")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"更新失败: {str(e)}"
-        )
-
-# ──────── 🌟 新增接口 1：获取当前店铺信息 ────────
-@shop_router.get(
-    "/current",
-    response_model=Optional[ShopResponse],  # 允许返回店铺对象或 None (JSON null)
-    status_code=status.HTTP_200_OK,
-    summary="获取当前登录用户关联的店铺信息"
-)
-def get_current_shop_info(
-    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    提供给小程序【设置页/店铺信息】使用：
-    查询当前选择/关联的真实店铺数据及员工总数。
-    """
-    # 1. 确定当前要查询的 shop_id：优先取 Header 传参，次之从关联关系获取
-    target_shop_id = x_shop_id
-
-    if not target_shop_id:
-        # 如果 Header 没传，去 shop_staff 表查用户绑定的第一个店铺 ID
-        staff_rel = db.query(StaffModel).filter(
-            StaffModel.user_id == current_user.id,
-            StaffModel.status == 1
-        ).first()
-        if staff_rel:
-            target_shop_id = staff_rel.shop_id
-
-    # 2. 未找到关联店铺，直接返回 None (JSON 会渲染为 null)
-    if not target_shop_id:
-        return None
-
-    # 3. 查询店铺主数据
-    shop = db.query(ShopModel).filter(ShopModel.id == target_shop_id, ShopModel.is_active == True).first()
-    if not shop:
-        return None
-
-    # 4. 统计该店铺下激活的员工总数 (从 ShopStaff 表统计)
-    staff_count = db.query(func.count(StaffModel.id)).filter(
-        StaffModel.shop_id == target_shop_id,
-        StaffModel.status == 1
-    ).scalar() or 1
-    shop.staff_count = staff_count
-
-    return shop
-
-# ──────── 🌟 新增接口 2：查询店铺下所有关联员工 ────────
-@shop_router.get("/staff/list", summary="查询店铺下关联的所有员工")
-def get_staff_list(
-    shop_id: Optional[int] = Query(None, description="需要查询的目标店铺ID"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    查询指定店铺下的员工列表。
-    - 开发/测试环境：超级管理员可传 shop_id 跨店切换测试。
-    - 线上生产环境：严禁超管或普通用户跨租户越权查询，强行绑定当前登录用户的 shop_id。
-    - 🌟 自动生成 Token：对待激活员工 (status==0) 自动注入 invite_token
-    """
-    is_production = settings.is_production  # 请确保与你的环境变量匹配
-    is_super_admin = getattr(current_user, "role", None) == ShopRole.OWNER.value
-
-    # 1. 确定最终生效的 shop_id
-    target_shop_id = getattr(current_user, "shop_id", 1)
-
-    if is_super_admin:
-        if is_production:
-            # 🛑 生产线上环境：严禁超管越权穿透，直接抛出权限异常或限制只能看自己的
-            if shop_id and shop_id != target_shop_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="线上生产环境禁止超级管理员越权跨店查看客户员工数据！"
-                )
-        else:
-            # 🟢 开发/测试环境：允许超管自由穿透传入 shop_id 测试
-            if shop_id:
-                target_shop_id = shop_id
-    else:
-        # 普通店员/店长：强行限制只能查自己所在店铺
-        if shop_id and shop_id != target_shop_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="您无权查看非本店铺的员工信息！"
-            )
-
-    # 2. 从数据库 StaffModel (shop_staff) 表检索员工
-    staff_records = db.query(StaffModel).filter(
-        StaffModel.shop_id == target_shop_id
-    ).all()
-
-    # 3. 转化为小程序前端所需格式
-    result_list = []
-    for s in staff_records:
-        is_active = (s.status == 1)  # status==1 表示已绑定在职，0 表示待接受邀请
-        is_owner = (s.role == ShopRole.OWNER.value or s.role == "owner")
-        
-        # 🌟 核心增补逻辑：如果是待激活/待绑定员工，为其自动生成专属加密 invite_token
-        invite_token = None
-        if not is_active:
-            # 💡 这里的签发逻辑请替换为你系统中生成加密 Token 的实际函数
-            # 必须包含 shop_id 和 staff_id (s.id) 信息
-            invite_token = create_access_token(
-                data={"shop_id": target_shop_id, "staff_id": s.id}
-            )
-
-        result_list.append({
-            "id": s.id,                             # shop_staff 档案 ID
-            "name": s.name or "员工",
-            "is_active": is_active,
-            "isActive": is_active,                # 兼容驼峰与下划线命名
-            "status": s.status,
-            "isCreator": is_owner, 
-            "roleName": "店长" if is_owner else "店员",
-            "role": s.role,
-            "invite_token": invite_token          # 🌟 将 Token 返回给前端
-        })
-
-    # 兜底数据（如果数据库为空，防止小程序渲染崩掉）
-    if not result_list:
-        result_list = [{
-            "id": current_user.id,
-            "name": getattr(current_user, "nickname", None) or getattr(current_user, "username", "店长"),
-            "is_active": True,
-            "isActive": True,
-            "status": 1,
-            "isCreator": True,
-            "roleName": "店长",
-            "role": "admin",
-            "invite_token": None
-        }]
-
-    return {
-        "code": 200,
-        "message": "success",
-        "data": result_list
-    }
-
-# ==========================================
-# 接口 1: 管理员新增员工档案 (未绑定 openid)
-# ==========================================
-@shop_router.post(
-    "/staff/create",
-    response_model=StaffResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="创建员工档案"
-)
-def create_staff(
-    req: CreateStaffRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(allow_shop_manager),
-    # 从 Header 中提取 X-Shop-Id
-    x_shop_id: str = Header(..., alias="X-Shop-Id") 
-):
-    # ---------------------------------------------------------
-    # 1. 安全校验：Header 及数据类型校验
-    # ---------------------------------------------------------
-    if not x_shop_id or not x_shop_id.isdigit():
-        raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请求头缺失或非法的 X-Shop-Id"
-        )
-
-    shop_id = int(x_shop_id)
-
-    # (可选增强) 校验当前管理员是否有权操作传入的这个 shop_id
-    # 如果管理员的账号有绑定 shop_id，且与 Header 不一致，可以阻断非法越权
-    if hasattr(current_user, 'shop_id') and current_user.shop_id and current_user.shop_id != shop_id:
-        raise BusinessException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="您无权管理该店铺的员工档案"
-        )
-
-    # ---------------------------------------------------------
-    # 2. 🛡️ 双重防御：防 NULL 逻辑漏洞（代码层防护）
-    # ---------------------------------------------------------
-    # 检查当前店铺下是否已经存在“同名”的在职员工或待认领档案
-    existing_staff = db.query(StaffModel).filter(
-        StaffModel.shop_id == shop_id,
-        StaffModel.name == req.nickname,
-        StaffModel.status.in_([0, 1])  # 0: 待认领, 1: 正常在职 (过滤掉 2: 已离职/禁用)
-    ).first()
-
-    if existing_staff:
-        status_text = "待接受邀请" if existing_staff.status == 0 else "在职"
-        raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"店铺内已存在名为 '{req.nickname}' 的{status_text}员工，请勿重复创建"
-        )
-
-    # ---------------------------------------------------------
-    # 3. 核心业务：预创建员工档案（绑定从 Header 传进来的 shop_id）
-    # ---------------------------------------------------------
-    # 获取角色字符串 (兼容 Enum 枚举和纯字符串)
-    staff_role = req.role.value if hasattr(req.role, 'value') else req.role
-
-    new_staff = StaffModel(
-        shop_id=shop_id,
-        user_id=None,                 # 未接受邀请前为 None
-        name=req.nickname,            # 员工姓名/备注
-        role=staff_role,
-        status=0                      # 状态 0: 待认领/待接受邀请
-    )
-    
-    try:
-        db.add(new_staff)
-        db.commit()
-        db.refresh(new_staff)
-    except Exception as e:
-        db.rollback()
-        # 防御兜底：捕获数据库唯一索引并发冲突等意外
-        raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="创建员工档案失败，系统数据异常"
-        )
-
-    # ---------------------------------------------------------
-    # 4. Bare Payload 模式返回规范 Response
-    # ---------------------------------------------------------
-    return StaffResponse(
-        id=new_staff.id,
-        nickname=new_staff.name,
-        role=new_staff.role,
-        status=new_staff.status,
-        is_active=False
-    )
 
 # ------------------------------------------------------------------
 # 2. 接口实现：GET /api/v1/shop/inventory/list
@@ -483,10 +145,11 @@ def get_inventory_list(
     """
     获取当前店铺下的设备库存列表（支持按状态筛选）
     """
-    # 1. 通过 current_user.id 到 shop_staff 表中查询绑定的员工记录 (且状态必须为正常在职 status=1)
-    staff_record = db.query(StaffModel).filter(
-        StaffModel.user_id == current_user.id,
-        StaffModel.status == 1  # 确保该员工状态正常（已接受邀请且未离职）
+    # 1. 通过 current_user.id 到 staff 表中查询绑定的员工记录 (且状态必须为正常在职 status=1)
+    staff_record = db.query(ShopStaffModel).filter(
+        ShopStaffModel.staff_id == current_user.id,
+        ShopStaffModel.shop_id == current_user.shop_id,
+        ShopStaffModel.status == 1  # 确保该员工状态正常（已接受邀请且未离职）
     ).first()
 
     if not staff_record:
@@ -497,7 +160,6 @@ def get_inventory_list(
         )
     
     shop_id = staff_record.shop_id
-    staff_id = staff_record.id
     if not shop_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
@@ -517,155 +179,9 @@ def get_inventory_list(
     # 遵循 Bare Payload 规范，直接返回对象字典（自动被 Pydantic 序列化为 {"items": [...]}）
     return {"items": items}
 
-# ==========================================
-# 接口 2: 生成邀请 Token (点击邀请按钮时调用)
-# ==========================================
-@shop_router.post("/staff/generate-invite")
-def generate_invite(
-    req: CreateInviteRequest,
-    db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_user)
-):
-    # 🌟 用 req.staff_id 去查已有员工，不要读不存在的 req.name 了！
-    staff = db.query(StaffModel).filter(
-        StaffModel.id == req.staff_id,
-        StaffModel.shop_id == req.shop_id
-    ).first()
-
-    if not staff:
-        raise HTTPException(status_code=404, detail="未找到该员工档案")
-
-    invite_token = f"INVITE_{staff.id}_{staff.shop_id}_{int(time.time())}"
-
-    return {
-        "code": 200,
-        "message": "生成邀请成功",
-        "data": {
-            "staff_id": staff.id,
-            "staff_name": staff.name,
-            "invite_token": invite_token
-        }
-    }
-
-# ==========================================
-# 接口 3: 受邀员工接受邀请并绑定 OpenID, 大部分时候邀请时还未注册
-# ==========================================
-async def get_wx_openid_by_code(code: str) -> dict:
-    """使用小程序临时 code 向微信 API 换取 openid 和 session_key"""
-    # 从你的 settings/env 获取小程序的 AppID 和 AppSecret
-    appid = settings.WX_APP_ID
-    secret = settings.WX_APP_SECRET
-
-    url = "https://api.weixin.qq.com/sns/jscode2session"
-    params = {
-        "appid": appid,
-        "secret": secret,
-        "js_code": code,
-        "grant_type": "authorization_code",
-    }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        data = response.json()
-
-    # 微信接口返回 errcode 不为 0 表示报错
-    if "errcode" in data and data["errcode"] != 0:
-        raise BusinessException(
-            status_code=400,
-            detail=f"微信登录失败: {data.get('errmsg', '未知错误')}",
-        )
-
-    return data  # 返回格式如: {"openid": "xxx", "session_key": "xxx"}
-
-@shop_router.post("/accept-invite")
-async def accept_invite(
-    req: AcceptInviteRequest,
-    db: Session = Depends(get_db)
-):
-    # 1. 解析 token (格式: INVITE_staffId_shopId_timestamp)
-    try:
-        payload = jwt.decode(
-            req.invite_token, settings.JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM]
-        )
-        parts = req.invite_token.split("_")
-        staff_id = payload.get("staff_id")
-        shop_id = payload.get("shop_id")
-    except Exception:
-        raise BusinessException(status_code=400, detail="无效的邀请链接")
-
-    # 2. 🌟 修复：查员工表 StaffModel，而不是店铺表 ShopModel！
-    staff_profile = db.query(StaffModel).filter(
-        StaffModel.id == staff_id, 
-        StaffModel.shop_id == shop_id
-    ).first()
-
-    if not staff_profile:
-        raise BusinessException(status_code=404, detail="邀请信息已失效或不存在")
-
-    if staff_profile.status == 1 and staff_profile.user_id is not None:
-        raise BusinessException(status_code=400, detail="该邀请已被其他人使用")
-
-    # ---------------------------------------------------------
-    # Step 3: 用 code 向微信服务器换取 openid (核心逻辑)
-    # ---------------------------------------------------------
-    wx_res = await get_wx_openid_by_code(
-        req.code
-    )  # 换取 openid 的封装函数 (调用微信 jscode2session 接口)
-    openid = wx_res.get("openid")
-
-    if not openid:
-        raise BusinessException(status_code=400, detail="微信登录凭证无效")
-
-    # ---------------------------------------------------------
-    # Step 4: 查找或自动注册用户 (User 表)
-    # ---------------------------------------------------------
-    user = db.query(User).filter(User.openid == openid).first()
-
-    if not user:
-        # 如果是第一次进来的新微信用户，自动创建账号
-        user = User(openid=openid, role=SystemRole.MERCHANT)
-        db.add(user)
-        db.flush()  # 拿到 user.id
 
 
-    # ---------------------------------------------------------
-    # 5. 🌟 关键防御：防 uix_shop_user 数据库唯一键冲突
-    # ---------------------------------------------------------
-    # 检查当前点击链接的用户，是否已经在该店铺拥有员工身份
-    already_member = db.query(StaffModel).filter(
-        StaffModel.shop_id == shop_id,
-        StaffModel.user_id == user.id,
-        StaffModel.id != staff_id
-    ).first()
 
-    if already_member:
-        # 如果已经拥有身份，拦截请求，抛出 RFC 7807 400 错误
-        raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            code="USER_ALREADY_MEMBER"
-        )
-
-    # 6. 🌟 优雅绑定：将 current_user.id 关联到员工档案上
-    staff_profile.user_id = user.id
-    staff_profile.status = 1  # 激活状态
-    staff_profile.shop_id = shop_id
-
-    db.commit()
-
-    # 4. 签发更新后的 Token
-    new_token = create_access_token(data={
-        "sub": str(user.id),
-        "role": staff_profile.role,
-        "openid": user.openid
-    })
-
-    return {
-        "token": new_token,
-        "shop_id": staff_profile.shop_id,
-        "staff_id": staff_profile.id,
-        "role": staff_profile.role,
-        "message": "成功加入店铺！"
-    }
 
 
 # ──────── 业务 B 接口 (手机店小程序) ────────
@@ -963,7 +479,7 @@ async def confirm_sell_device(
     # ---------------------------------------------------------
     if not x_shop_id:
         raise BusinessException(
-            code="MISSING_SHOP_ID",
+            code=ErrorCode.MISSING_SHOP_ID,
             detail="缺少必要参数：请求头中未包含 X-Shop-Id",
             status_code=status.HTTP_400_BAD_REQUEST,
             type_url="https://api.yourdomain.com/errors/missing-shop-id",
@@ -980,7 +496,7 @@ async def confirm_sell_device(
 
     if not is_locked:
         raise BusinessException(
-            code="DUPLICATE_REQUEST",
+            code=ErrorCode.DUPLICATE_REQUEST,
             detail="请勿重复提交！正在处理中...",
             status_code=status.HTTP_400_BAD_REQUEST,
             type_url="https://api.yourdomain.com/errors/duplicate-request",
@@ -1007,7 +523,7 @@ async def confirm_sell_device(
         # 双重校验：避免排队等待锁出来后库存已被上一事务扣完
         if not device or device.stock_quantity <= 0:
             raise BusinessException(
-                code="DEVICE_NOT_FOUND_OR_SOLD",
+                code=ErrorCode.DEVICE_NOT_FOUND_OR_SOLD,
                 detail=f"未在库存中找到可售设备或已被抢先售出：'{real_model}'",
                 status_code=status.HTTP_404_NOT_FOUND,
                 type_url="https://api.yourdomain.com/errors/device-not-found",
@@ -1087,7 +603,7 @@ async def confirm_sell_device(
         db.rollback()
         logger.exception("【系统错误】设备确认出售失败:")
         raise BusinessException(
-            code="INTERNAL_SERVER_ERROR",
+            code=ErrorCode.INTERNAL_SERVER_ERROR,
             detail=f"服务器内部数据错误: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             type_url="https://api.yourdomain.com/errors/internal-server-error",

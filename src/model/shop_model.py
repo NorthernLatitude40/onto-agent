@@ -20,10 +20,9 @@ class ShopModel(Base):
     is_active = Column(Boolean, default=True, comment="店铺状态：1-正常，0-禁用")
     created_at = Column(DateTime, default=datetime.now, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
-    owner_id = Column(BigInteger, ForeignKey("shop_staff.id")) # 店主/创建者
+    owner_id = Column(BigInteger, ForeignKey("staff.id")) # 店主/创建者
 
     # 修改 2：明确指定 foreign_keys，绑定店主员工记录
     owner = relationship("StaffModel", foreign_keys=[owner_id])
 
-    # 修改 3：店铺下的所有员工列表 (一对多)
-    staffs = relationship("StaffModel", back_populates="shop", foreign_keys="[StaffModel.shop_id]")
+    staff_relations = relationship("ShopStaffModel", back_populates="shop")

@@ -56,6 +56,17 @@ TRANSLATIONS.update({
         "en-US": "You are already a member of this mall; duplicate operations are not allowed.",
         "ja-JP": "すでに当施設のメンバーとして登録されています。重複して登録することはできません。"
     },
+    "NOT_SHOP_STAFF": {
+        "zh-CN": "不是店铺员工",
+        "en-US": "不是店铺员工",
+        "ja-JP": "不是店铺员工"
+    },
+    "PHONE_EXISTS": {
+        "zh-CN": "该手机号已被使用",
+        "en-US": "该手机号已被使用",
+        "ja-JP": "该手机号已被使用"
+    },
+    
 })
 
 DEFAULT_LANGUAGE = "en-US"
@@ -86,3 +97,13 @@ def get_i18n_message(code: str, accept_language: str | None = None, fallback_det
         target_lang,
         code_dict.get(DEFAULT_LANGUAGE, fallback_detail or code)
     )
+
+# 🌟 自動將 TRANSLATIONS 的 Key 轉成 ErrorCode 類別的屬性
+class _ErrorCodeMeta(type):
+    def __getattr__(cls, key: str) -> str:
+        if key in TRANSLATIONS:
+            return key
+        raise AttributeError(f"ErrorCode '{key}' 不存在於 TRANSLATIONS 字典中")
+
+class ErrorCode(metaclass=_ErrorCodeMeta):
+    pass

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from src.common.exceptions import BusinessException, register_exception_handlers
 from src.core.shop_agent.system import ShopAgentSystem
+from src.config.config import settings
 
 
 
@@ -31,8 +32,7 @@ def get_harness(request: Request):
     harness = getattr(request.app.state, "worker", None)
     if not harness:
         raise BusinessException(
-            message="Agent Harness 未初始化", 
-            code=500, 
+            detail="Agent Harness 未初始化", 
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
     return harness
@@ -118,11 +118,11 @@ async def agent_api_endpoint(
 @router.post("/upload", summary="上传代码/文件")
 async def upload_code(file: Annotated[UploadFile, File()]):
     if not file.filename:
-        raise BusinessException(message="未传入有效文件名", code=400)
+        raise BusinessException(detail="未传入有效文件名", status_code=400)
 
     # 安全性防范：清理文件名，防止路径穿越攻击（Path Traversal）
     safe_filename = Path(file.filename).name
-    file_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_filename}"
+    file_path = settings.UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe_filename}"
 
     try:
         content = await file.read()
@@ -130,7 +130,7 @@ async def upload_code(file: Annotated[UploadFile, File()]):
             await buffer.write(content)
     except Exception as e:
         logger.error(f"文件写入失败: {e}", exc_info=True)
-        raise BusinessException(message="文件保存失败", code=500)
+        raise BusinessException(detail="文件保存失败", status_code=500)
 
     return {
         "code": 200,
@@ -155,7 +155,7 @@ async def deploy_canvas(graph_dto: dict, request: Request):
         )
     except Exception as e:
         logger.error(f"画布编译部署失败: {e}", exc_info=True)
-        raise BusinessException(message=f"画布编译部署失败: {str(e)}", code=400)
+        raise BusinessException(detail=f"画布编译部署失败: {str(e)}", status_code=400)
 
     return {"code": 200, "message": "画布编译并部署成功！", "data": None}
 
