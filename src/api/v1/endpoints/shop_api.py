@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import func
 
 from src.common.database import get_db
@@ -12,7 +12,7 @@ from src.config.config import settings
 from src.common.dict import SystemRole, ShopRole
 from src.api.auth_api import get_current_user, create_access_token
 from src.api.auth_api import get_current_user 
-from src.model.shop_schema import ShopResponse, CreateShopPayload, UpdateShopPayload
+from src.model.shop_schema import ShopResponse, CreateShopPayload, UpdateShopPayload, ShopSimpleResponse
 from src.model.shop_model import ShopModel
 from src.common.logger import get_logger
 from src.common.exceptions import BusinessException
@@ -211,21 +211,30 @@ def get_current_shop_info(
     return shop
 
 # ==================== 2. 查：獲取當前用戶的所有店鋪列表 ====================
-@router.get("/my-shops", summary="獲取當前用戶關聯的店鋪列表")
+@router.get(
+    "/my-shops", 
+    response_model=List[ShopSimpleResponse],  # 建議指定回傳的 Schema，符合 Bare Payload
+    summary="獲取當前用戶關聯的店鋪列表"
+)
 def get_my_shops(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: StaffModel = Depends(get_current_user)
 ):
-    # 查詢當前用戶在哪些店鋪擔當 Staff
-    staff_records = db.query(StaffModel).filter(
-        StaffModel.user_id == current_user.id,
-        StaffModel.status == 1
-    ).all()
-    
-    shop_ids = [s.shop_id for s in staff_records]
-    shops = db.query(ShopModel).filter(
-        ShopModel.id.in_(shop_ids),
-        ShopModel.status != 0  # 排除已軟刪除
-    ).all()
+    """
+    獲取當前登入用戶所有在職（status=1）且店鋪未被刪除（status!=0）的店鋪列表
+    """
+    # 🌟 關鍵修復：跨三表 (User -> Staff -> ShopStaff -> Shop) 進行關聯查詢
+    shops = (
+        db.query(ShopModel)
+        .join(ShopStaffModel, ShopModel.id == ShopStaffModel.shop_id)
+        .join(StaffModel, ShopStaffModel.staff_id == StaffModel.id)
+        .filter(
+            StaffModel.id == current_user.id,     # 1. 匹配當前登入用戶
+            ShopStaffModel.status == 1,                # 2. 必須是在該店正常在職的員工 (1: 在職)
+            ShopModel.is_active == True                     # 3. 排除已軟刪除/停用的店鋪
+        )
+        .all()
+    )
 
+    # 🌟 如果用戶未關聯任何店鋪，回傳空陣列 [] (Bare Payload 規範)
     return shops
