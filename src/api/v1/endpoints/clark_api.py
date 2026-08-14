@@ -278,7 +278,7 @@ def get_staff_list(
             # 💡 这里的签发逻辑请替换为你系统中生成加密 Token 的实际函数
             # 必须包含 shop_id 和 staff_id (s.id) 信息
             invite_token = create_access_token(
-                data={"shop_id": target_shop_id, "staff_id": s.id}
+                data={"shop_id": target_shop_id, "staff_id": s.staff_id}
             )
 
         result_list.append({
