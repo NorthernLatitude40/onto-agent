@@ -62,6 +62,15 @@ def get_current_user(
     if user is None:
         raise credentials_exception
 
+    staff = db.query(StaffModel).filter(StaffModel.user_id == user_id).first()
+    # 🌟 核心：如果員工被禁用 (例如 status == 2)，直接拋出 401/403
+    if staff and staff.status == 2:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="您的帳號已被禁用，請聯繫管理員",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return user
 
 
