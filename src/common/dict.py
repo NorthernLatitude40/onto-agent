@@ -15,3 +15,12 @@ class ShopRole(str, Enum):
     OWNER = "owner"
     MANAGER = "manager"
     STAFF = "staff"
+
+    @property
+    def label(self) -> str:
+        mapping = {
+            ShopRole.MANAGER: "店長",
+            ShopRole.STAFF: "店員",
+            ShopRole.OWNER: "Boss",
+        }
+        return mapping.get(self, "Boss")

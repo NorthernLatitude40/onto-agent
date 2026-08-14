@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 # 💡 请根据你的项目目录确保导入路径正确
 from src.model.user_model import User
 from src.model.staff_model import StaffModel
+from src.model.shop_staff_model import ShopStaffModel
 from src.api.auth_api import get_current_user
 from src.common.database import get_db                  # 补全 get_db 导入
 from src.common.exceptions import BusinessException, PermissionDeniedException
 from src.common.dict import SystemRole, ShopRole
+from src.common.i18n import ErrorCode, get_i18n_message
 
 
 # ==============================================================================
@@ -49,46 +51,49 @@ class ShopRoleChecker:
         self,
         # 1. 设置 Header 可选，默认值为 None
         shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
-        sys_user: User = Depends(get_current_user),
+        current_user: StaffModel = Depends(get_current_user),
         db: Session = Depends(get_db)
     ) -> Optional[StaffModel]:
-        
-
-        # 1. 如果是平台超管，直接放行
-        user_system_role = getattr(sys_user, "system_role", getattr(sys_user, "role", None))
-        if user_system_role == SystemRole.ADMIN.value or user_system_role == SystemRole.ADMIN:
-            staff_relation = StaffModel(
-                    shop_id=DEFAULT_TEST_SHOP_ID,
-                    id=0,
-                    user_id=sys_user.id,
-                    name="admin",
-                    role=ShopRole.OWNER,
-                    status=1
-                )
-            return staff_relation
-
         # 🚀 2. 核心调整：如果前端没传 Header，固定使用测试店铺 ID (比如 1)
         target_shop_id = shop_id if shop_id is not None else DEFAULT_TEST_SHOP_ID
 
-        # 3. 查询用户在该店铺下的具体角色
-        staff_relation = db.query(StaffModel).filter(
-            StaffModel.shop_id == target_shop_id,
-            StaffModel.user_id == sys_user.id
+        # 1. 如果是平台超管，直接放行
+        staff_relation = db.query(ShopStaffModel).filter(
+            ShopStaffModel.shop_id == target_shop_id,
+            ShopStaffModel.staff_id == current_user.id
         ).first()
+        
+        if current_user.user.role == SystemRole.ADMIN.value or current_user.user.role == SystemRole.ADMIN:
+            staff = StaffModel(
+                    shop_id=target_shop_id,
+                    id=current_user.id,
+                    user_id=current_user.user.id,
+                    name=current_user.name
+                )
+            return staff
+
+        if staff_relation.role == ShopRole.OWNER.value or staff_relation.role == ShopRole.OWNER:
+            staff = StaffModel(
+                    shop_id=target_shop_id,
+                    id=current_user.id,
+                    user_id=current_user.user.id,
+                    name=current_user.name
+                )
+            return staff
 
         # 4. 未绑定店铺或已禁用
         if not staff_relation:
             raise BusinessException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                code="NOT_SHOP_STAFF",
-                message=f"当前用户未绑定店铺 ID 为 {target_shop_id} 的员工权限"
+                code=ErrorCode.NOT_SHOP_STAFF,
+                detail=f"当前用户未绑定店铺 ID 为 {target_shop_id} 的员工权限"
             )
 
         # 5. 校验店铺内角色是否合规
         if staff_relation.role not in self.allowed_shop_roles:
             raise PermissionDeniedException()
 
-        return staff_relation
+        return current_user
 
 
 # 预定义店铺级权限快捷依赖项：
