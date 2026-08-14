@@ -115,7 +115,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             invalid_params=exc.errors()
         )
         return JSONResponse(
-            status_code=exc.status_code,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content=problem_details.model_dump(
                 exclude_none=True
             ),  # Pydantic v2 用 model_dump，v1 用 .dict()
