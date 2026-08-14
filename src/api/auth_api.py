@@ -229,13 +229,14 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
     summary="获取当前登录用户信息"
 )
 async def get_my_info(
+    x_shop_id: int = Header(..., alias="X-Shop-Id"),
     db: Session = Depends(get_db),
     current_user: StaffModel = Depends(get_current_user)
     ):
 
     staff_ralation = db.query(ShopStaffModel).filter(
         ShopStaffModel.staff_id == current_user.id,
-        ShopStaffModel.shop_id == current_user.shop_id
+        ShopStaffModel.shop_id == x_shop_id
     ).first()
 
     return UserResponse(
