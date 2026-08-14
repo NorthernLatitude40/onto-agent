@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import List, Optional
 
 import httpx
 import jwt
@@ -20,6 +20,7 @@ from src.model.staff_model import StaffModel
 from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
 from src.common.i18n import ErrorCode, get_i18n_message
 from src.model.shop_staff_model import ShopStaffModel
+from src.model.staff_model import StaffModel
 
 router = APIRouter(prefix="/api/v1/auth", tags=["认证鉴权"])
 
@@ -170,8 +171,37 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
             role="staff",
         )
         db.add(user)
+        db.flush()
+
+        staff = StaffModel(
+            user_id = user.id,
+            name = "手机店员",
+            # 体验店铺
+            shop_id = 1
+        )
+        db.add(staff)
+        db.flush()
+
+        staff_relation = ShopStaffModel(
+            staff_id= staff.id,
+            shop_id =1,
+            role = "staff",
+            status = 1
+        )
+        db.add(staff_relation)
+
         db.commit()
         db.refresh(user)
+        db.refresh(staff)
+        db.refresh(staff_relation)
+
+    staff = db.query(StaffModel).filter(StaffModel.user_id == user.id).first()
+
+    staff_relation = db.query(ShopStaffModel).filter(
+        ShopStaffModel.shop_id == staff.shop_id,
+        ShopStaffModel.staff_id == staff.id
+    ).first()
+
 
     # 5. 签发 Token
     access_token = create_access_token(
@@ -180,7 +210,15 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
 
     return LoginResponse(
         token=access_token,
-        user_info=user
+        user_info=UserResponse(
+            id=staff.id,
+            nickname=staff.name,
+            role=staff_relation.role,
+            admin_role=user.role,
+            phone=user.phone,
+            avatar_url=user.avatar_url,
+            shop_id=staff.shop_id
+        )
     )
 
 
@@ -194,6 +232,7 @@ async def get_my_info(
     db: Session = Depends(get_db),
     current_user: StaffModel = Depends(get_current_user)
     ):
+
     staff_ralation = db.query(ShopStaffModel).filter(
         ShopStaffModel.staff_id == current_user.id,
         ShopStaffModel.shop_id == current_user.shop_id
@@ -205,6 +244,7 @@ async def get_my_info(
         role=staff_ralation.role,
         phone=current_user.user.phone,
         avatar_url=current_user.user.avatar_url,
+        shop_id=current_user.shop_id,
         created_at=current_user.created_at
     )
 
@@ -216,10 +256,11 @@ async def get_my_info(
 )
 def update_my_info(
     user_in: UserUpdateSchema,
-    current_user: StaffModel = Depends(get_current_user),
+    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前店鋪ID"),
+    current_user: StaffModel = Depends(get_current_user), # current_user 是 StaffModel
     db: Session = Depends(get_db),
 ):
-    """修改当前登录人的基本信息（手机号存 User 表，姓名/备注存 staff 表）"""
+    """修改当前登录人的基本信息（手机号存 User 表，姓名存 Staff 表）"""
     update_data = user_in.model_dump(exclude_unset=True)
 
     # 1. 校验是否有传要修改的字段
@@ -233,29 +274,44 @@ def update_my_info(
     staff_updated = False
 
     # 2. 更新 User 表（手机号）
-    if "phone" in update_data:
-        new_phone = update_data.pop("phone")
+    if "phone" in update_data and update_data["phone"] is not None:
+        new_phone = update_data["phone"]
         
+        # 检查手机号是否重复
         existing = db.query(User).filter(User.phone == new_phone, User.id != current_user.user_id).first()
         if existing:
             raise BusinessException(status_code=400, code=ErrorCode.PHONE_EXISTS, detail="该手机号已被使用")
             
         current_user.user.phone = new_phone
         user_updated = True
-            
+
+    # 🌟 3. 更新 Staff 表（姓名/暱稱）（就是這裡之前漏掉了！）
+    # 支援前端傳 nickname 或 name
+    new_name = update_data.get("nickname") or update_data.get("name")
+    if new_name is not None:
+        current_user.name = new_name
+        staff_updated = True
+
+    # 4. 獲取當前店鋪 ID 並查詢 shop_staff 關聯檔（獲取角色）
+    target_shop_id = x_shop_id or getattr(current_user, "current_shop_id", 1)
     
-    staff_ralation = db.query(ShopStaffModel).filter(
+    staff_relation = db.query(ShopStaffModel).filter(
         ShopStaffModel.staff_id == current_user.id,
-        ShopStaffModel.shop_id == current_user.shop_id
+        ShopStaffModel.shop_id == target_shop_id
     ).first()
 
-    # 4. 提交数据库事务
+    # 5. 提交数据库事务
     try:
         if user_updated:
+            db.add(current_user.user)
+            
+        if staff_updated:
             db.add(current_user)
             
         db.commit()
         db.refresh(current_user)
+        if current_user.user:
+            db.refresh(current_user.user)
         
     except Exception as e:
         db.rollback()
@@ -265,11 +321,13 @@ def update_my_info(
             message=f"更新用户信息失败: {str(e)}"
         )
 
+    # 6. 組裝回傳
     return UserResponse(
         id=current_user.id,
-        nickname=current_user.name,
-        role=staff_ralation.role,
-        phone=current_user.user.phone,
-        avatar_url=current_user.user.avatar_url,
+        nickname=current_user.name,  # 現在這裡能正確拿到更新後的姓名了！
+        role=staff_relation.role if staff_relation else "staff",
+        phone=current_user.user.phone if current_user.user else None,
+        avatar_url=getattr(current_user.user, "avatar_url", None),
+        shop_id=target_shop_id,
         created_at=current_user.created_at
     )
