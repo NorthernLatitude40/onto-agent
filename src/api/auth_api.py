@@ -21,6 +21,9 @@ from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
 from src.common.i18n import ErrorCode, get_i18n_message
 from src.model.shop_staff_model import ShopStaffModel
 from src.model.staff_model import StaffModel
+from src.common.logger import get_logger
+
+logger = get_logger("API_SERVICE")
 
 router = APIRouter(prefix="/api/v1/auth", tags=["认证鉴权"])
 
@@ -223,30 +226,81 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/me", 
-    response_model=UserResponse, 
+    "/me",
+    response_model=UserResponse,
     status_code=status.HTTP_200_OK,
-    summary="获取当前登录用户信息"
+    summary="獲取當前登入使用者資訊",
 )
 async def get_my_info(
     x_shop_id: int = Header(..., alias="X-Shop-Id"),
     db: Session = Depends(get_db),
-    current_user: StaffModel = Depends(get_current_user)
-    ):
+    current_user: StaffModel = Depends(get_current_user),
+):
+    # 💡 印出請求參數與 current_user 資訊
+    logger.info(
+        f"[get_my_info] 收到請求 | Header X-Shop-Id: {x_shop_id} | "
+        f"current_user.id (Staff): {current_user.id} | "
+        f"current_user.user_id: {getattr(current_user, 'user_id', None)}"
+    )
 
-    staff_ralation = db.query(ShopStaffModel).filter(
-        ShopStaffModel.staff_id == current_user.id,
-        ShopStaffModel.shop_id == x_shop_id
-    ).first()
+    # 1. 查詢員工與該店鋪的關聯紀錄
+    staff_relation = (
+        db.query(ShopStaffModel)
+        .filter(
+            ShopStaffModel.staff_id == current_user.id,
+            ShopStaffModel.shop_id == x_shop_id,
+            ShopStaffModel.status == 1,
+        )
+        .first()
+    )
 
+    # 💡 印出資料庫查詢結果
+    if staff_relation:
+        logger.info(
+            f"[get_my_info] 成功查到關聯 | shop_id: {staff_relation.shop_id} | "
+            f"staff_id: {staff_relation.staff_id} | role: {staff_relation.role} | status: {staff_relation.status}"
+        )
+    else:
+        logger.warning(
+            f"[get_my_info] 查無關聯資料! 嘗試尋找 matches -> "
+            f"ShopStaffModel(staff_id={current_user.id}, shop_id={x_shop_id}, status=1)"
+        )
+
+        # 💡 額外 Log：輔助排查是否資料庫裡其實有資料，但 status 不是 1
+        any_relation = (
+            db.query(ShopStaffModel)
+            .filter(
+                ShopStaffModel.staff_id == current_user.id,
+                ShopStaffModel.shop_id == x_shop_id,
+            )
+            .first()
+        )
+        if any_relation:
+            logger.warning(
+                f"[get_my_info] 注意：找到該關聯但狀態不符！"
+                f"目前 status={any_relation.status} (需要 1)"
+            )
+        else:
+            logger.warning(
+                f"[get_my_info] 注意：資料庫完全不存在 staff_id={current_user.id} 與 shop_id={x_shop_id} 的紀錄！"
+            )
+
+        # 2. 空值防禦：若查無關聯，拋出例外
+        raise BusinessException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="NOT_SHOP_MEMBER",
+            detail="您不是該店鋪的成員或帳號已被停用",
+        )
+
+    # 3. 組合並回傳資料
     return UserResponse(
         id=current_user.id,
         nickname=current_user.name,
-        role=staff_ralation.role,
-        phone=current_user.user.phone,
-        avatar_url=current_user.user.avatar_url,
-        shop_id=current_user.shop_id,
-        created_at=current_user.created_at
+        role=staff_relation.role,
+        phone=current_user.user.phone if current_user.user else None,
+        avatar_url=current_user.user.avatar_url if current_user.user else None,
+        shop_id=x_shop_id,
+        created_at=current_user.created_at,
     )
 
 @router.put(
