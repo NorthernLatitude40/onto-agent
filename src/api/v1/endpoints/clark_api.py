@@ -432,7 +432,6 @@ async def accept_invite(
     if staff_profile:
         staff_profile = StaffModel(
             user_id=user.id,
-            status=1,
             shop_id=target_shop_id
         )
         db.add(staff_profile)
