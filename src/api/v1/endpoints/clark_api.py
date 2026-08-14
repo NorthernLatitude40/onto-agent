@@ -427,15 +427,19 @@ async def accept_invite(
         db.add(user)
         db.flush()
 
-    # 獲取或懶加載建立 StaffProfile
+    # 獲取或懶加載建立 StaffProfile 
     staff_profile = db.query(StaffModel).filter(StaffModel.id == target_staff_id).first()
+
     if staff_profile:
-        staff_profile = StaffModel(
-            user_id=user.id,
-            shop_id=target_shop_id
-        )
-        db.add(staff_profile)
-        db.flush()
+        # 直接修改既有物件的欄位
+        staff_profile.user_id = user.id
+        staff_profile.shop_id = target_shop_id
+        
+        # SQLAlchemy 會自動追蹤物件的修改，不需要呼叫 db.add()
+        db.flush()  # 或 db.commit()
+    else:
+        # 處理找不到資料的情況（例如拋出自訂異常）
+        raise BusinessException(code="STAFF_NOT_FOUND", status_code=404)
 
     # ---------------------------------------------------------
     # Step 4: 關鍵防禦 - 檢查是否已經是該店鋪成員
