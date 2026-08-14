@@ -138,61 +138,83 @@ def update_staff(
     db: Session = Depends(get_db),
     current_user: StaffModel = Depends(allow_shop_manager),
 ):
-    target_shop_id = shop_id or getattr(current_user, "shop_id", 1)
-    
-    # 1. 查詢目標員工
-    target_staff = db.query(StaffModel).filter(
-        StaffModel.id == staff_id,
-        StaffModel.shop_id == target_shop_id
-    ).first()
+    # 0. 確定當前操作的店鋪 ID
+    target_shop_id = shop_id or getattr(current_user, "current_shop_id", 1)
 
+    # 1. 查詢【目標員工】的基本資料 (StaffModel)
+    target_staff = db.query(StaffModel).filter(StaffModel.id == staff_id).first()
     if not target_staff:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
-            detail="找不到該員工資訊"
+            detail="找不到該員工基本資訊"
         )
 
-    # 2. 提取更新欄位 (Pydantic v2 建議使用 model_dump，若為 v1 可用 dict)
-    update_data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
-
-    staff_ralation = db.query(ShopStaffModel).filter(
-        ShopStaffModel.staff_id == current_user.id,
-        ShopStaffModel.shop_id == current_user.shop_id
+    # 2. 查詢【目標員工】在【當前店鋪】的關聯紀錄 (ShopStaffModel)
+    target_relation = db.query(ShopStaffModel).filter(
+        ShopStaffModel.staff_id == staff_id,
+        ShopStaffModel.shop_id == target_shop_id
     ).first()
 
-    # 🌟 3. 角色變更邊界校驗 (完全不查庫，直接從 current_user 取出 Depends 已經查好的角色)
-    if "role" in update_data:
-        # Depends (allow_shop_manager) 裡面如果把 staff 資訊掛在 current_user 身上
-        # 例如 current_user.current_staff.role 或 current_user.role
-        operator_role = getattr(staff_ralation, "role", None)
+    if not target_relation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="該員工不屬於當前店鋪"
+        )
 
-        # 越權保護：只有店長 (manager) 嘗試動 Owner 權限時攔截；Owner 或其它通過 Depend 的角色直接放行
+    # 3. 提取前端傳進來的有效更新欄位 (過濾掉未傳遞的 None)
+    update_data = payload.model_dump(exclude_unset=True, mode="json") if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True, use_enum_values=True)
+
+    # 🌟 4. 越權保護：查詢【操作者自己】在當前店鋪的角色
+    operator_relation = db.query(ShopStaffModel).filter(
+        ShopStaffModel.staff_id == current_user.id,
+        ShopStaffModel.shop_id == target_shop_id
+    ).first()
+    
+    operator_role = operator_relation.role if operator_relation else None
+
+    # 如果嘗試變更角色，進行越權保護校驗
+    if "role" in update_data:
+        new_role = update_data["role"]
+        # 店長 (manager) 不能修改店主 (owner) 的角色，也不能將別人提升為店主 (owner)
         if operator_role == "manager":
-            staff_ralation = db.query(ShopStaffModel).filter(
-                ShopStaffModel.staff_id == current_user.id,
-                ShopStaffModel.shop_id == current_user.shop_id
-            ).first()
-            if staff_ralation.role == "owner" or update_data["role"] == "owner":
+            if target_relation.role == "owner" or new_role == "owner":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="權限不足：店長(manager)無法變更店主的角色"
+                    detail="權限不足：店長(manager)無法變更店主(owner)的角色"
                 )
 
-    # 4. 執行更新邏輯
-    for field, value in update_data.items():
-        setattr(target_staff, field, value)
+    # 🌟 5. 數據更新分流處理（核心修復！）
 
-    staff_ralation.status =  update_data["status"]
-    db.add(staff_ralation)
+    # A. 更新 StaffModel 屬於個人的欄位 (例如: name, phone 等)
+    staff_fields = {"name", "phone", "avatar", "nickname"}
+    for field in staff_fields:
+        if field in update_data and update_data[field] is not None:
+            setattr(target_staff, field, update_data[field])
 
+    # B. 更新 ShopStaffModel 屬於店鋪關聯的欄位 (role, status)
+    if "role" in update_data and update_data["role"] is not None:
+        # 如果 update_data["role"] 是 Enum 物件，轉成 value
+        role_val = update_data["role"]
+        target_relation.role = role_val.value if hasattr(role_val, "value") else str(role_val)
+
+    if "status" in update_data and update_data["status"] is not None:
+        target_relation.status = update_data["status"]
+
+    # 6. 統一提交資料庫更新
+    db.add(target_staff)
+    db.add(target_relation)
     db.commit()
+    
     db.refresh(target_staff)
+    db.refresh(target_relation)
+
+    # 7. 組裝回傳
     return StaffResponse(
         id=target_staff.id,
         nickname=target_staff.name,
-        role=staff_ralation.role,
-        status=staff_ralation.status,
-        is_active=False
+        role=target_relation.role,
+        status=target_relation.status,
+        is_active=(target_relation.status == 1)
     )
 
 # ──────── 🌟 2：查询店铺下所有关联员工 ────────
@@ -351,88 +373,109 @@ async def accept_invite(
     req: AcceptInviteRequest,
     db: Session = Depends(get_db)
 ):
-    # 1. 解析 token (格式: INVITE_staffId_shopId_timestamp)
-    try:
-        payload = jwt.decode(
-            req.invite_token, settings.JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM]
-        )
-        parts = req.invite_token.split("_")
-        staff_id = payload.get("staff_id")
-        shop_id = payload.get("shop_id")
-    except Exception:
-        raise BusinessException(status_code=400, detail="无效的邀请链接")
-
-    staff_profile = db.query(StaffModel).filter(
-        StaffModel.id == staff_id
-    ).first()
-
-    shop_staff = db.query(ShopStaffModel).filter(
-        ShopStaffModel.staff_id == staff_id,
-        ShopStaffModel.shop_id == shop_id
-    ).first()
-
-    if not shop_staff:
-        raise BusinessException(status_code=404, detail="邀请信息已失效或不存在")
-
-    if shop_staff.status == 1 and staff_profile.user_id is not None:
-        raise BusinessException(status_code=400, detail="该邀请已被其他人使用")
+    target_shop_id = None
+    target_staff_id = None
 
     # ---------------------------------------------------------
-    # Step 3: 用 code 向微信服务器换取 openid (核心逻辑)
+    # Step 1: 解析邀請憑證 (模式 A: token / 模式 B: shop_id)
     # ---------------------------------------------------------
-    wx_res = await get_wx_openid_by_code(
-        req.code
-    )  # 换取 openid 的封装函数 (调用微信 jscode2session 接口)
+    if req.invite_token:
+        try:
+            payload = jwt.decode(
+                req.invite_token, settings.JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM]
+            )
+            target_staff_id = payload.get("staff_id")
+            target_shop_id = payload.get("shop_id")
+        except Exception:
+            raise BusinessException(status_code=400, detail="無效的邀請連結")
+            
+        # 驗證該專屬邀請記錄是否存在
+        shop_staff = db.query(ShopStaffModel).filter(
+            ShopStaffModel.staff_id == target_staff_id,
+            ShopStaffModel.shop_id == target_shop_id
+        ).first()
+
+        if not shop_staff:
+            raise BusinessException(status_code=404, detail="邀請資訊已失效或不存在")
+
+    elif req.shop_id:
+        target_shop_id = req.shop_id
+    else:
+        raise BusinessException(status_code=400, detail="缺少邀請憑證或店鋪ID")
+
+    # ---------------------------------------------------------
+    # Step 2: 用 code 換取微信 openid
+    # ---------------------------------------------------------
+    wx_res = await get_wx_openid_by_code(req.code)
     openid = wx_res.get("openid")
 
     if not openid:
-        raise BusinessException(status_code=400, detail="微信登录凭证无效")
+        raise BusinessException(status_code=400, detail="微信登入憑證無效")
 
     # ---------------------------------------------------------
-    # Step 4: 查找或自动注册用户 (User 表)
+    # Step 3: 查找或自動註冊 User & Staff 基礎檔案
     # ---------------------------------------------------------
     user = db.query(User).filter(User.openid == openid).first()
 
     if not user:
-        # 如果是第一次进来的新微信用户，自动创建账号
         user = User(openid=openid, role=SystemRole.MERCHANT)
         db.add(user)
-        db.flush()  # 拿到 user.id
+        db.flush()
+
+    # 獲取或懶加載建立 StaffProfile
+    staff_profile = db.query(StaffModel).filter(StaffModel.user_id == user.id).first()
+    if not staff_profile:
+        staff_profile = StaffModel(
+            user_id=user.id,
+            name=f"店員_{user.id}"
+        )
+        db.add(staff_profile)
+        db.flush()
 
     # ---------------------------------------------------------
-    # 5. 🌟 關鍵防禦：防 uix_shop_user 資料庫唯一鍵衝突
+    # Step 4: 關鍵防禦 - 檢查是否已經是該店鋪成員
     # ---------------------------------------------------------
-    # 檢查當前點擊連結的使用者，是否已經在該店鋪擁有員工身份
     already_member = db.query(ShopStaffModel).filter(
-        ShopStaffModel.shop_id == shop_id,
-        ShopStaffModel.staff_id == staff_id  # 👈 只要留下這行即可！
+        ShopStaffModel.shop_id == target_shop_id,
+        ShopStaffModel.staff_id == staff_profile.id
     ).first()
 
-    if already_member:
-        # 如果已經擁有身份，攔截請求，拋出 RFC 7807 400 錯誤
+    if already_member and already_member.status == 1:
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            code=ErrorCode.USER_ALREADY_MEMBER
+            code=ErrorCode.USER_ALREADY_MEMBER,
+            detail="您已經是該店鋪的成員，請勿重複加入"
         )
 
-    # 6. 🌟 优雅绑定：将 current_user.id 关联到员工档案上
-    staff_profile.user_id = user.id
-    staff_profile.status = 1  # 激活状态
-    staff_profile.shop_id = shop_id
+    # ---------------------------------------------------------
+    # Step 5: 綁定店鋪關聯 (ShopStaffModel)
+    # ---------------------------------------------------------
+    if not already_member:
+        already_member = ShopStaffModel(
+            shop_id=target_shop_id,
+            staff_id=staff_profile.id,
+            role="staff",
+            status=1
+        )
+        db.add(already_member)
+    else:
+        already_member.status = 1  # 激活狀態
 
     db.commit()
 
-    # 4. 签发更新后的 Token
+    # ---------------------------------------------------------
+    # Step 6: 簽發新 Token 並回傳
+    # ---------------------------------------------------------
     new_token = create_access_token(data={
         "sub": str(user.id),
-        "role": staff_profile.role,
+        "role": already_member.role,
         "openid": user.openid
     })
 
     return {
         "token": new_token,
-        "shop_id": staff_profile.shop_id,
+        "shop_id": target_shop_id,
         "staff_id": staff_profile.id,
-        "role": staff_profile.role,
-        "message": "成功加入店铺！"
+        "role": already_member.role,
+        "message": "成功加入店鋪！"
     }
