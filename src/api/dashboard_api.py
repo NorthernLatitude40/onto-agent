@@ -21,8 +21,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from src.core.shop_agent.system import ShopAgentSystem
-from src.model.user_model import User
-from src.common.dict import SystemRole, ShopRole
+from src.model.user_model import UserModel
+from src.common.dict import ShopRole
 from src.model.shop_model import ShopModel
 from src.model.staff_model import StaffModel
 from src.model.schema import  CreateInviteRequest, AcceptInviteRequest, CreateStaffRequest
@@ -30,11 +30,10 @@ from src.model.shop_schema import ShopResponse, CreateShopPayload, UpdateShopPay
 from src.api.auth_api import get_current_user, create_access_token
 from src.common.exceptions import BusinessException
 from src.config.config import settings
-from src.dependencies.permissions import allow_admin, allow_shop_manager, allow_shop_staff
+from src.dependencies.permissions import allow_shop_manager, allow_shop_staff
 from src.model.clark_schema import StaffResponse
 from src.model.dashboard_schema import DashboardOverviewResponse
 from src.common.i18n import ErrorCode, get_i18n_message
-from src.model.shop_staff_model import ShopStaffModel
 
 # 引入你的数据库连接、Session依赖与 ORM 模型
 from src.common.database import get_db
@@ -136,47 +135,31 @@ shop_router = APIRouter(prefix="/api/v1/shop", tags=["店铺业务"])
 # ------------------------------------------------------------------
 # 2. 接口实现：GET /api/v1/shop/inventory/list
 # ------------------------------------------------------------------
+# 注意：把参数 query 中的 status 改名为 stock_status，避免与 fastapi.status 模块重名冲突！
 @shop_router.get("/inventory/list", response_model=StockListResponse)
 def get_inventory_list(
-    status: Optional[int] = Query(None, description="库存状态: 1-在库, 2-已售, 3-退货等"),
+    stock_status: Optional[int] = Query(None, alias="status", description="库存状态: 1-在库, 2-已售, 3-退货等"),
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)  # 校验身份并获取所属店铺
+    # 🌟 核心重构：直接注入依赖，一行代码搞定身份+店铺+权限校验，并直接返回 StaffModel
+    current_staff: StaffModel = Depends(allow_shop_staff) 
 ):
     """
     获取当前店铺下的设备库存列表（支持按状态筛选）
     """
-    # 1. 通过 current_user.id 到 staff 表中查询绑定的员工记录 (且状态必须为正常在职 status=1)
-    staff_record = db.query(ShopStaffModel).filter(
-        ShopStaffModel.staff_id == current_user.id,
-        ShopStaffModel.shop_id == current_user.shop_id,
-        ShopStaffModel.status == 1  # 确保该员工状态正常（已接受邀请且未离职）
-    ).first()
+    # 1. 直接从 current_staff 中安全获取当前请求的 shop_id
+    shop_id = current_staff.shop_id
 
-    if not staff_record:
-        # RFC 7807 规范抛出 400 或 403 错误
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="当前用户未绑定任何店铺或暂无店铺操作权限"
-        )
-    
-    shop_id = staff_record.shop_id
-    if not shop_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="当前用户未绑定任何店铺"
-        )
-
-    # 基础查询：过滤当前店铺的数据
+    # 2. 基础查询：过滤当前店铺的数据
     query = db.query(InventoryModel).filter(InventoryModel.shop_id == shop_id)
 
-    # 如果前端传了 status 参数（如 status=1 在库设备）
-    if status is not None:
-        query = query.filter(InventoryModel.status == status)
+    # 3. 如果前端传了 status 参数
+    if stock_status is not None:
+        query = query.filter(InventoryModel.status == stock_status)
 
-    # 按创建时间/更新时间倒序
+    # 4. 按创建时间倒序
     items = query.order_by(InventoryModel.created_at.desc()).all()
 
-    # 遵循 Bare Payload 规范，直接返回对象字典（自动被 Pydantic 序列化为 {"items": [...]}）
+    # 遵循 Bare Payload 规范返回
     return {"items": items}
 
 

@@ -48,7 +48,7 @@ class ShopSimpleResponse(BaseModel):
 # 2. 完整版模型（繼承 ShopSimpleResponse）
 class ShopResponse(ShopSimpleResponse):
     """当前店铺信息响应模型 (Bare Payload)"""
-    owner_id: int
+    # owner_id: int
     contact_name: Optional[str] = ""
     contact_phone: Optional[str] = ""
     province: Optional[str] = ""
@@ -57,7 +57,7 @@ class ShopResponse(ShopSimpleResponse):
     address_detail: Optional[str] = ""
     staff_count: int = 1  # 激活员工总数
     is_active: bool
-    created_at: datetime
+    # created_at: datetime
 
     # 隱式繼承了父類別的 model_config = ConfigDict(from_attributes=True)
     # 不用再重複撰寫！

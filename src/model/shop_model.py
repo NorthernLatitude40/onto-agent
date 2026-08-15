@@ -8,8 +8,8 @@ from src.common.database import Base  # 你的 Base基类
 class ShopModel(Base):
     __tablename__ = "shops"
 
-    id = Column(Integer, primary_key=True, autoincrement=True, comment="店铺ID")
-    name = Column(String(100), nullable=False, comment="店铺名称")
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
     logo = Column(String(255), nullable=True, comment="店铺LOGO图片地址")
     contact_name = Column(String(50), nullable=True, comment="联系人姓名")
     contact_phone = Column(String(20), nullable=True, comment="联系电话")
@@ -18,11 +18,6 @@ class ShopModel(Base):
     district = Column(String(50), nullable=True, comment="区县")
     address_detail = Column(String(255), nullable=True, comment="详细地址")
     is_active = Column(Boolean, default=True, comment="店铺状态：1-正常，0-禁用")
-    created_at = Column(DateTime, default=datetime.now, comment="创建时间")
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
-    owner_id = Column(BigInteger, ForeignKey("staff.id")) # 店主/创建者
 
-    # 修改 2：明确指定 foreign_keys，绑定店主员工记录
-    owner = relationship("StaffModel", foreign_keys=[owner_id])
-
-    staff_relations = relationship("ShopStaffModel", back_populates="shop")
+    # 1个店铺对应多个 staff 记录
+    staffs = relationship("StaffModel", back_populates="shop", cascade="all, delete-orphan")

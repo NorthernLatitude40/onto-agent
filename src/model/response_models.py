@@ -13,6 +13,8 @@ class UserResponse(BaseModel):
     avatar_url: Optional[str] = None
     created_at: Optional[datetime] = None
     shop_id: int
+    default_shop_id: Optional[int] = None
+    default_staff_id: Optional[int] = None
 
     # 💡 必须配置：允许 Pydantic 直接从 SQLAlchemy ORM 对象读取数据
     model_config = ConfigDict(from_attributes=True)
