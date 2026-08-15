@@ -12,6 +12,8 @@ class UserModel(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     openid = Column(String(64), unique=True, nullable=False)
+    default_shop_id = Column(Integer, nullable=True)
+    default_staff_id = Column(Integer, nullable=True)
     
     # 1个微信用户可以拥有多个 staff 履职记录（支持一人兼任多店）
     staff_employments = relationship("StaffModel", back_populates="user")

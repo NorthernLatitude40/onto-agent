@@ -302,29 +302,39 @@ def get_my_shops(
     )
 
     shops_list = []
+    
+    # 🌟 标记是否已经找到了默认项，确保唯一性
+    has_default_set = False
+
     for shop, role, staff_id in results:
-        # 🌟 优先通过 staff_id 精确匹配默认身份；若无 default_staff_id 则退化匹配 shop_id
+        is_default = False
+        
+        # 优先通过 staff_id 精确匹配
         if user_default_staff_id is not None:
-            is_default = (staff_id == user_default_staff_id)
+            if staff_id == user_default_staff_id:
+                is_default = True
+        # 若无 staff_id，则退化匹配 shop_id，且必须确保当前还没设置过默认项
         elif user_default_shop_id is not None:
-            is_default = (shop.id == user_default_shop_id)
-        else:
-            is_default = False
+            if shop.id == user_default_shop_id and not has_default_set:
+                is_default = True
+        
+        if is_default:
+            has_default_set = True
 
         shops_list.append({
             "id": shop.id,
-            "staff_id": staff_id,  # 对应的 staff_id
+            "staff_id": staff_id,
             "name": shop.name,
             "logo": shop.logo,
             "contact_name": shop.contact_name,
             "contact_phone": shop.contact_phone,
-            "role": role,  # 当前账号在该身份下的角色
-            "is_default": is_default,  # 🌟 标识是否为默认身份
+            "role": role,
+            "is_default": is_default, # 现在只会有一个 True
             "address": f"{shop.province or ''}{shop.city or ''}{shop.district or ''}{shop.address_detail or ''}"
         })
 
-    # 3. 如果用户尚未设置默认店铺/身份（或原默认记录已失效），默认将列表中第 0 个设为 is_default
-    if shops_list and not any(s["is_default"] for s in shops_list):
+    # 3. 如果用户尚未设置默认店铺/身份，且列表不为空，强制将第 0 个设为默认
+    if shops_list and not has_default_set:
         shops_list[0]["is_default"] = True
 
     return shops_list

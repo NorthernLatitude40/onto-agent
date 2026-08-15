@@ -375,6 +375,8 @@ async def get_my_info(
         avatar_url=getattr(current_user, "avatar_url", None) or staff_profile.avatar,
         shop_id=x_shop_id,
         created_at=staff_profile.created_at,
+        default_shop_id=getattr(current_user, "default_shop_id", 1),
+        default_staff_id=getattr(current_user, "default_staff_id", 1)
     )
 
 
