@@ -1,25 +1,29 @@
-from sqlalchemy import Column, BigInteger, Integer, String, DateTime, ForeignKey, SmallInteger, func, UniqueConstraint
+from datetime import datetime
+from sqlalchemy import Column, Integer, String, SmallInteger, DateTime, ForeignKey, BigInteger
 from sqlalchemy.orm import relationship
 from src.common.database import Base
 
 class StaffModel(Base):
-    """
-    店铺与员工的绑定关系表（一对多或多对多）
-    """
     __tablename__ = "staff"
 
-    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False, index=True)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     
-    # 🌟 关键：未被接纳认领前，user_id 为 None！绝对不存假 OpenID！
-    user_id = Column(BigInteger, ForeignKey("sys_user.id"), nullable=True, index=True)
+    # 1. 关联门店：直接外键关联 Shop（1 个 Staff 属于 1 个门店）
+    shop_id = Column(Integer, ForeignKey("shops.id", ondelete="CASCADE"), nullable=False, index=True)
     
-    name = Column(String(64), nullable=False, comment="管理员填写的员工姓名/备注")
+    # 2. 关联微信用户：允许为 None！预录入时为空，扫码后绑定 user_id
+    user_id = Column(BigInteger, ForeignKey("sys_user.id", ondelete="SET NULL"), nullable=True, index=True)
     
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # 3. 基础与岗位信息
+    phone = Column(String(20), nullable=False, index=True) # 预留手机号（用于匹配绑定）
+    name = Column(String(50), nullable=False)        # 真实姓名
+    role = Column(String(20), nullable=False, default="staff") # 'manager', 'staff'
+    status = Column(SmallInteger, nullable=False, default=0)    # 0: 待绑定/未激活, 1: 正常在职, 2: 禁用/离职
+    avatar = Column(String(255), default="")
+    
+    created_at = Column(DateTime(timezone=True), default=datetime.now)
+    updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)
 
-    # 對應 UserModel 裡的 staff_profiles 屬性
-    user = relationship("User", back_populates="staff_profiles")
-
-    shop_employments = relationship("ShopStaffModel", back_populates="staff")
+    # ORM 关联映射
+    shop = relationship("ShopModel", back_populates="staffs")
+    user = relationship("UserModel", back_populates="staff_employments")

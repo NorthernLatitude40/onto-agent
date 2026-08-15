@@ -12,16 +12,16 @@ from sqlalchemy.orm import Session
 from src.common.database import get_db
 from src.config.config import settings
 from src.model.schema import UserUpdateSchema
-from src.model.user_model import User
+from src.model.user_model import UserModel
 from src.model.schema import UserOutSchema, TokenOutSchema, UserUpdateSchema
 from src.model.response_models import LoginResponse, UserResponse
 from src.common.exceptions import BusinessException
 from src.model.staff_model import StaffModel
 from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
 from src.common.i18n import ErrorCode, get_i18n_message
-from src.model.shop_staff_model import ShopStaffModel
 from src.model.staff_model import StaffModel
 from src.common.logger import get_logger
+from src.common.dict import ShopRole
 
 logger = get_logger("API_SERVICE")
 
@@ -43,12 +43,16 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
+# ──────── 🌟 1. 基础依赖：解析 Token 获取当前登录账号 (User) ────────
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db),
-    x_shop_id: int = Header(..., alias="X-Shop-Id")
-) -> StaffModel:
-    """【核心依赖】解析 Token 并获取当前登录用户对象"""
+    db: Session = Depends(get_db)
+) -> UserModel:
+    """
+    全局账号鉴权依赖：
+    只校验 JWT Token 合法性，不强绑定 X-Shop-Id。
+    适用于：获取个人信息、创建店铺、查询用户店铺列表等通用接口。
+    """
     token = credentials.credentials
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -64,28 +68,71 @@ def get_current_user(
     except jwt.PyJWTError:
         raise credentials_exception
 
-    # 注意：确保查询时 ID 类型与数据库字段类型一致
-    user = db.query(User).filter(User.id == int(user_id)).first()
+    user = db.query(UserModel).filter(UserModel.id == int(user_id)).first()
     if user is None:
         raise credentials_exception
 
-    staff = db.query(StaffModel).filter(StaffModel.user_id == user_id).first()
+    return user
 
-    staff_relation = db.query(ShopStaffModel).filter(
-        ShopStaffModel.shop_id == x_shop_id,
-        ShopStaffModel.staff_id == staff.id
+
+# ──────── 🌟 2. 店铺上下文依赖：获取当前用户在指定店铺的员工档案 (StaffModel) ────────
+def get_current_staff(
+    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id"),
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> StaffModel:
+    """
+    店铺履职鉴权依赖：
+    根据 Header 中的 X-Shop-Id + 当前登录用户 ID，直接在 StaffModel 单表中精确定位员工档案。
+    适用于：更新员工信息、修改店铺、管理商品等店铺内部业务接口。
+    """
+    if not x_shop_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请求头缺少 X-Shop-Id 参数，请选择店铺后再操作"
+        )
+
+    # 单表精准定位：匹配 shop_id + user_id
+    staff = db.query(StaffModel).filter(
+        StaffModel.shop_id == x_shop_id,
+        StaffModel.user_id == current_user.id
     ).first()
 
+    if not staff:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="您不是该店铺的员工或无权访问此店铺"
+        )
 
-    # 🌟 核心：如果員工被禁用 (例如 status == 2)，直接拋出 401/403
-    if staff_relation and staff_relation.status == 2:
+    # 🌟 状态校验：0-待绑定, 1-正常在职, 2-已禁用/离职
+    if staff.status == 2:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="您的帳號已被禁用，請聯繫管理員",
+            detail="您在该店铺的账号已被禁用，请联系管理员",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if staff.status == 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="您的员工身份尚未激活，请先完成邀请绑定"
+        )
+
     return staff
+
+
+# ──────── 🌟 3. 权限管理依赖：验证当前员工是否为店长/管理员 ────────
+def allow_shop_manager(
+    current_staff: StaffModel = Depends(get_current_staff)
+) -> StaffModel:
+    """店长/管理员管理权限校验依赖"""
+    allowed_roles = {ShopRole.OWNER.value, "owner", "manager", "admin"}
+    if current_staff.role not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="权限不足：仅限店长或系统管理员操作"
+        )
+    return current_staff
 
 
 class PermissionChecker:
@@ -93,7 +140,7 @@ class PermissionChecker:
     def __init__(self, allowed_roles: List[str]):
         self.allowed_roles = allowed_roles
 
-    def __call__(self, current_user: User = Depends(get_current_user)) -> User:
+    def __call__(self, current_user: UserModel = Depends(get_current_user)) -> UserModel:
         if current_user.role not in self.allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -114,6 +161,7 @@ class WxLoginPayload(BaseModel):
 # Routes
 # ----------------------------------------------------------------------
 
+# ──────── 微信小程序登录/注册 API (单表架构重构版) ────────
 @router.post(
     "/wx-login", 
     response_model=LoginResponse, 
@@ -121,14 +169,25 @@ class WxLoginPayload(BaseModel):
     summary="微信小程序登录/注册"
 )
 async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
+    """
+    微信登录/注册接口：
+    1. 拿 code 换取 openid
+    2. 若用户不存在，创建 User 并初始化默认体验店铺的 Staff 档案
+    3. 移除 ShopStaffModel 中间表，所有职务与店铺绑定关系直接落入 StaffModel
+    4. 签发 JWT Token 并返回前端所需的用户信息
+    """
+    # ---------------------------------------------------------
     # 1. 校验 Code
-    if not payload.code.strip():
+    # ---------------------------------------------------------
+    if not payload.code or not payload.code.strip():
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
             code=ErrorCode.WX_CODE_EMPTY
         )
 
+    # ---------------------------------------------------------
     # 2. 请求微信接口换取 session_key 和 openid
+    # ---------------------------------------------------------
     wx_url = "https://api.weixin.qq.com/sns/jscode2session"
     params = {
         "appid": settings.WX_APP_ID,
@@ -148,12 +207,13 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
                 code="WX_SERVICE_UNAVAILABLE"
             )
         
+    # ---------------------------------------------------------
     # 3. 检查微信 API 返回状态
+    # ---------------------------------------------------------
     if wx_data.get("errcode", 0) != 0:
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
             code=ErrorCode.WX_LOGIN_FAILED,
-            # 如果想在调试日志中保留微信原生 errmsg，可以放在 extra 里，RFC 7807 会自动序列化输出
             extra={"wx_errmsg": wx_data.get("errmsg")} 
         )
 
@@ -164,225 +224,287 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
             code=ErrorCode.WX_OPENID_NOT_FOUND
         )
 
-    # 4. 数据库查询与用户注册
-    user = db.query(User).filter(User.openid == openid).first()
+    # ---------------------------------------------------------
+    # 4. 数据库查询与用户自动注册 (单表架构)
+    # ---------------------------------------------------------
+    user = db.query(UserModel).filter(UserModel.openid == openid).first()
 
     if not user:
-        user = User(
+        # A. 创建微信账号基本数据 (UserModel)
+        user = UserModel(
             openid=openid,
             nickname="手机店员",
             role="staff",
         )
         db.add(user)
-        db.flush()
+        db.flush()  # 拿到 user.id
 
+        # B. 默认绑定体验店铺 (StaffModel 单表直接包含 shop_id 与 role)
         staff = StaffModel(
-            user_id = user.id,
-            name = "手机店员",
-            # 体验店铺
-            shop_id = 1
+            user_id=user.id,
+            shop_id=1,                            # 体验店铺 ID
+            name="手机店员",
+            role="staff",                         # 职务角色
+            status=1                              # 1: 在职/激活
         )
         db.add(staff)
-        db.flush()
 
-        staff_relation = ShopStaffModel(
-            staff_id= staff.id,
-            shop_id =1,
-            role = "staff",
-            status = 1
-        )
-        db.add(staff_relation)
+        try:
+            db.commit()
+            db.refresh(user)
+            db.refresh(staff)
+        except Exception as e:
+            db.rollback()
+            raise BusinessException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"注册用户失败: {str(e)}"
+            )
+    else:
+        # B. 老用户登录：获取其最新绑定的 StaffModel 档案
+        staff = db.query(StaffModel).filter(
+            StaffModel.user_id == user.id,
+            StaffModel.status == 1  # 优先查找在职档案
+        ).order_by(StaffModel.id.desc()).first()
 
-        db.commit()
-        db.refresh(user)
-        db.refresh(staff)
-        db.refresh(staff_relation)
-
-    staff = db.query(StaffModel).filter(StaffModel.user_id == user.id).first()
-
-    staff_relation = db.query(ShopStaffModel).filter(
-        ShopStaffModel.shop_id == staff.shop_id,
-        ShopStaffModel.staff_id == staff.id
-    ).first()
-
-
-    # 5. 签发 Token
+    # ---------------------------------------------------------
+    # 5. 签发 Token 并组装回传
+    # ---------------------------------------------------------
     access_token = create_access_token(
-        data={"sub": str(user.id), "role": user.role, "openid": openid}
+        data={"sub": str(user.id),  "openid": openid}
     )
+
+    # 安全处理字段防护，避免未绑定店铺时报错
+    current_shop_id = staff.shop_id if staff else 1
+    staff_name = staff.name if staff else (getattr(user, "nickname", "手机店员"))
+    staff_role = staff.role if staff else "staff"
+    staff_id = staff.id if staff else user.id
 
     return LoginResponse(
         token=access_token,
         user_info=UserResponse(
-            id=staff.id,
-            nickname=staff.name,
-            role=staff_relation.role,
-            admin_role=user.role,
-            phone=user.phone,
-            avatar_url=user.avatar_url,
-            shop_id=staff.shop_id
+            id=staff_id,                          # 返回员工档案 ID (或账号 ID)
+            nickname=staff_name,                  # 员工姓名
+            role=staff_role,                      # 在店铺中的角色 (如 owner/manager/staff)
+            phone=getattr(user, "phone", None),
+            avatar_url=getattr(user, "avatar_url", None),
+            shop_id=current_shop_id               # 默认关联店铺 ID
         )
     )
 
 
+# ──────── 🌟 获致当前登录使用者资讯 API (单表架构重构版) ────────
 @router.get(
     "/me",
     response_model=UserResponse,
     status_code=status.HTTP_200_OK,
-    summary="獲取當前登入使用者資訊",
+    summary="获取当前登录使用者资讯",
 )
 async def get_my_info(
     x_shop_id: int = Header(..., alias="X-Shop-Id"),
     db: Session = Depends(get_db),
-    current_user: StaffModel = Depends(get_current_user),
+    current_user: UserModel = Depends(get_current_user),  # 🌟 依赖微信账号 User
 ):
-    # 💡 印出請求參數與 current_user 資訊
+    # 💡 打印请求参数与 current_user 资讯
     logger.info(
-        f"[get_my_info] 收到請求 | Header X-Shop-Id: {x_shop_id} | "
-        f"current_user.id (Staff): {current_user.id} | "
-        f"current_user.user_id: {getattr(current_user, 'user_id', None)}"
+        f"[get_my_info] 收到请求 | Header X-Shop-Id: {x_shop_id} | "
+        f"current_user.id (User): {current_user.id}"
     )
 
-    # 1. 查詢員工與該店鋪的關聯紀錄
-    staff_relation = (
-        db.query(ShopStaffModel)
+    # ---------------------------------------------------------
+    # 1. 单表查询当前用户在目标店铺的履职档案 (StaffModel)
+    # ---------------------------------------------------------
+    staff_profile = (
+        db.query(StaffModel)
         .filter(
-            ShopStaffModel.staff_id == current_user.id,
-            ShopStaffModel.shop_id == x_shop_id,
-            ShopStaffModel.status == 1,
+            StaffModel.user_id == current_user.id,
+            StaffModel.shop_id == x_shop_id,
+            StaffModel.status == 1,  # 必须是在职/激活状态
         )
         .first()
     )
 
-    # 💡 印出資料庫查詢結果
-    if staff_relation:
-        logger.info(
-            f"[get_my_info] 成功查到關聯 | shop_id: {staff_relation.shop_id} | "
-            f"staff_id: {staff_relation.staff_id} | role: {staff_relation.role} | status: {staff_relation.status}"
-        )
-    else:
+    # ---------------------------------------------------------
+    # 2. 查无在职档案时的防御与日志排查
+    # ---------------------------------------------------------
+    if not staff_profile:
         logger.warning(
-            f"[get_my_info] 查無關聯資料! 嘗試尋找 matches -> "
-            f"ShopStaffModel(staff_id={current_user.id}, shop_id={x_shop_id}, status=1)"
+            f"[get_my_info] 查无在职档案! 尝试排查是否存在非激活档案 -> "
+            f"StaffModel(user_id={current_user.id}, shop_id={x_shop_id})"
         )
 
-        # 💡 額外 Log：輔助排查是否資料庫裡其實有資料，但 status 不是 1
-        any_relation = (
-            db.query(ShopStaffModel)
+        # 💡 辅助排查：是否在数据库中有记录，但状态不是 1 (例如 0:待绑定, 2:已禁用)
+        any_profile = (
+            db.query(StaffModel)
             .filter(
-                ShopStaffModel.staff_id == current_user.id,
-                ShopStaffModel.shop_id == x_shop_id,
+                StaffModel.user_id == current_user.id,
+                StaffModel.shop_id == x_shop_id,
             )
             .first()
         )
-        if any_relation:
+
+        if any_profile:
             logger.warning(
-                f"[get_my_info] 注意：找到該關聯但狀態不符！"
-                f"目前 status={any_relation.status} (需要 1)"
+                f"[get_my_info] 注意：找到员工档案但状态不符！"
+                f"目前 status={any_profile.status} (需要 1)"
             )
         else:
             logger.warning(
-                f"[get_my_info] 注意：資料庫完全不存在 staff_id={current_user.id} 與 shop_id={x_shop_id} 的紀錄！"
+                f"[get_my_info] 注意：数据库完全不存在 user_id={current_user.id} 与 shop_id={x_shop_id} 的档案记录！"
             )
 
-        # 2. 空值防禦：若查無關聯，拋出例外
         raise BusinessException(
             status_code=status.HTTP_403_FORBIDDEN,
             code="NOT_SHOP_MEMBER",
-            detail="您不是該店鋪的成員或帳號已被停用",
+            detail="您不是该店铺的成员或账号已被停用/未激活",
         )
 
-    # 3. 組合並回傳資料
-    return UserResponse(
-        id=current_user.id,
-        nickname=current_user.name,
-        role=staff_relation.role,
-        phone=current_user.user.phone if current_user.user else None,
-        avatar_url=current_user.user.avatar_url if current_user.user else None,
-        shop_id=x_shop_id,
-        created_at=current_user.created_at,
+    logger.info(
+        f"[get_my_info] 成功查到档案 | shop_id: {staff_profile.shop_id} | "
+        f"staff_id: {staff_profile.id} | role: {staff_profile.role} | status: {staff_profile.status}"
     )
 
+    # ---------------------------------------------------------
+    # 3. 组合并回传数据
+    # ---------------------------------------------------------
+    return UserResponse(
+        id=staff_profile.id,                            # 返回 Staff 档案 ID
+        nickname=staff_profile.name,                    # 员工姓名
+        role=staff_profile.role,                        # 该店下的角色 (owner/manager/staff)
+        admin_role=getattr(current_user, "role", "staff"),
+        phone=getattr(current_user, "phone", None) or staff_profile.phone,
+        avatar_url=getattr(current_user, "avatar_url", None) or staff_profile.avatar,
+        shop_id=x_shop_id,
+        created_at=staff_profile.created_at,
+    )
+
+
+
+
 @router.put(
-    "/me", 
-    response_model=UserResponse, 
+    "/me",
+    response_model=UserResponse,
     status_code=status.HTTP_200_OK,
     summary="修改当前登录用户信息"
 )
 def update_my_info(
     user_in: UserUpdateSchema,
-    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前店鋪ID"),
-    current_user: StaffModel = Depends(get_current_user), # current_user 是 StaffModel
+    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前店铺ID"),
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """修改当前登录人的基本信息（手机号存 User 表，姓名存 Staff 表）"""
+    """修改当前登录人的基本信息（包含默认店铺/身份、手机号、昵称、头像）"""
     update_data = user_in.model_dump(exclude_unset=True)
 
     # 1. 校验是否有传要修改的字段
     if not update_data:
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            code=ErrorCode.NO_UPDATE_FIELDS_PROVIDED
+            code="NO_UPDATE_FIELDS_PROVIDED",
+            detail="请提供需要更新的字段"
         )
 
     user_updated = False
     staff_updated = False
 
-    # 2. 更新 User 表（手机号）
+    # 🌟 2. 处理设置默认店铺与默认员工身份 (存 User 表)
+    # 独立处理，不强依赖 header 中的 X-Shop-Id
+    if "default_shop_id" in update_data and update_data["default_shop_id"] is not None:
+        target_default_shop_id = update_data["default_shop_id"]
+        target_default_staff_id = update_data.get("default_staff_id")
+
+        # 校验选中的店铺/员工身份是否真正属于当前用户
+        staff_query = db.query(StaffModel).filter(
+            StaffModel.user_id == current_user.id,
+            StaffModel.shop_id == target_default_shop_id,
+            StaffModel.status == 1
+        )
+        if target_default_staff_id:
+            staff_query = staff_query.filter(StaffModel.id == target_default_staff_id)
+
+        target_default_staff = staff_query.first()
+        if not target_default_staff:
+            raise BusinessException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code="INVALID_DEFAULT_SHOP",
+                detail="您不属于该店铺或员工身份无效，无法设为默认"
+            )
+
+        # 真正写入 sys_user 表
+        if hasattr(current_user, "default_shop_id"):
+            current_user.default_shop_id = target_default_shop_id
+            user_updated = True
+            
+        if hasattr(current_user, "default_staff_id"):
+            current_user.default_staff_id = target_default_staff.id
+            user_updated = True
+
+    # 🌟 3. 查找当前操作上下文的员工档案 (用于更新当前店铺下的个人信息，如昵称、手机号)
+    target_shop_id = x_shop_id or getattr(current_user, "default_shop_id", None) or 1
+    staff = db.query(StaffModel).filter(
+        StaffModel.user_id == current_user.id,
+        StaffModel.shop_id == target_shop_id,
+        StaffModel.status == 1  # 确保在职
+    ).first()
+
+    # 4. 处理手机号更新（同步更新 User 表 与 当前 Staff 表）
     if "phone" in update_data and update_data["phone"] is not None:
         new_phone = update_data["phone"]
         
-        # 检查手机号是否重复
-        existing = db.query(User).filter(User.phone == new_phone, User.id != current_user.user_id).first()
-        if existing:
-            raise BusinessException(status_code=400, code=ErrorCode.PHONE_EXISTS, detail="该手机号已被使用")
-            
-        current_user.user.phone = new_phone
-        user_updated = True
+        if hasattr(current_user, "phone"):
+            current_user.phone = new_phone
+            user_updated = True
 
-    # 🌟 3. 更新 Staff 表（姓名/暱稱）（就是這裡之前漏掉了！）
-    # 支援前端傳 nickname 或 name
+        if staff and hasattr(staff, "phone"):
+            staff.phone = new_phone
+            staff_updated = True
+
+    # 5. 处理头像更新 (存 User 表)
+    if "avatar_url" in update_data and update_data["avatar_url"] is not None:
+        if hasattr(current_user, "avatar_url"):
+            current_user.avatar_url = update_data["avatar_url"]
+            user_updated = True
+
+    # 6. 处理员工姓名/昵称更新 (存 Staff 表)
     new_name = update_data.get("nickname") or update_data.get("name")
-    if new_name is not None:
-        current_user.name = new_name
+    if new_name is not None and staff:
+        staff.name = new_name
         staff_updated = True
 
-    # 4. 獲取當前店鋪 ID 並查詢 shop_staff 關聯檔（獲取角色）
-    target_shop_id = x_shop_id or getattr(current_user, "current_shop_id", 1)
-    
-    staff_relation = db.query(ShopStaffModel).filter(
-        ShopStaffModel.staff_id == current_user.id,
-        ShopStaffModel.shop_id == target_shop_id
-    ).first()
-
-    # 5. 提交数据库事务
+    # 7. 提交数据库事务
     try:
         if user_updated:
-            db.add(current_user.user)
-            
-        if staff_updated:
             db.add(current_user)
+        if staff_updated and staff:
+            db.add(staff)
             
-        db.commit()
-        db.refresh(current_user)
-        if current_user.user:
-            db.refresh(current_user.user)
-        
+        if user_updated or staff_updated:
+            db.commit()
+            if user_updated: 
+                db.refresh(current_user)
+            if staff_updated and staff: 
+                db.refresh(staff)
+            
     except Exception as e:
         db.rollback()
         raise BusinessException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            code=ErrorCode.UPDATE_USER_FAILED,
-            message=f"更新用户信息失败: {str(e)}"
+            code="UPDATE_USER_FAILED",
+            detail=f"更新用户信息失败: {str(e)}"
         )
 
-    # 6. 組裝回傳
+    # 8. 安全获取属性并组装返回
+    staff_phone = getattr(staff, "phone", None) or getattr(current_user, "phone", None)
+    avatar = getattr(current_user, "avatar_url", None) or (getattr(staff, "avatar", None) if staff else None)
+    default_shop_id = getattr(current_user, "default_shop_id", None) or target_shop_id
+
     return UserResponse(
-        id=current_user.id,
-        nickname=current_user.name,  # 現在這裡能正確拿到更新後的姓名了！
-        role=staff_relation.role if staff_relation else "staff",
-        phone=current_user.user.phone if current_user.user else None,
-        avatar_url=getattr(current_user.user, "avatar_url", None),
+        id=staff.id if staff else current_user.id,
+        nickname=staff.name if staff else getattr(current_user, "nickname", "--"),
+        role=staff.role if staff else getattr(current_user, "role", "staff"),
+        admin_role=getattr(current_user, "role", "staff"),
+        phone=staff_phone,
+        avatar_url=avatar,
         shop_id=target_shop_id,
-        created_at=current_user.created_at
+        default_shop_id=default_shop_id,
+        created_at=staff.created_at if staff else getattr(current_user, "created_at", None)
     )

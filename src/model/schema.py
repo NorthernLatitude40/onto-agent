@@ -6,8 +6,8 @@ class UserUpdateSchema(BaseModel):
     nickname: Optional[str] = Field(None, max_length=64, description="用户昵称")
     avatar_url: Optional[str] = Field(None, max_length=255, description="头像URL")
     phone: Optional[str] = Field(None, max_length=20, description="手机号")
-
-
+    default_shop_id: Optional[int] = Field(None, description="默认店铺ID")
+    default_staff_id: Optional[int] = None
 
 
 
