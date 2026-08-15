@@ -2,7 +2,7 @@ import time
 import httpx
 import jwt
 from datetime import datetime, date, time as dt_time
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request, Path
 from sqlalchemy.orm import Session
 from typing import Optional
 from sqlalchemy.exc import IntegrityError
@@ -119,10 +119,9 @@ def create_staff(
 # ==========================================
 # 接口: 统一更新员工资讯/状态/角色 (重构版：单表逻辑，移除中间表)
 # ==========================================
-@router.put("/{staff_id}", response_model=StaffResponse, summary="统一更新员工资讯/状态/角色")
+@router.put("", response_model=StaffResponse, summary="统一更新员工资讯/状态/角色")
 def update_staff(
-    staff_id: int,
-    payload: StaffUpdateSchema,
+    staff_id: int = Header(..., alias="x-staff-id"), # 🌟 直接从 Header 提取
     shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
     db: Session = Depends(get_db),
     current_user: StaffModel = Depends(allow_shop_manager), # 当前操作者的 StaffModel 实例

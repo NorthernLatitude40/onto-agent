@@ -28,6 +28,7 @@ class ShopRoleChecker:
     def __call__(
         self,
         shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
+        staff_id: Optional[int] = Header(None, alias="X-Staff-Id", description="当前选择的StaffID"),
         current_user: UserModel = Depends(get_current_user), # 🌟 统一依赖 UserModel
         db: Session = Depends(get_db)
     ) -> StaffModel:
@@ -60,7 +61,8 @@ class ShopRoleChecker:
         # ---------------------------------------------------------
         staff = db.query(StaffModel).filter(
             StaffModel.user_id == current_user.id,
-            StaffModel.shop_id == target_shop_id
+            StaffModel.shop_id == target_shop_id,
+            StaffModel.id == staff_id
         ).first()
 
         # 3. 未绑定店铺或档案不存在
