@@ -20,3 +20,38 @@ class StaffResponse(BaseModel):
 
     # 兼容 ORM 模型自动转换
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==========================================
+# 1. 设置默认店铺/身份 请求体 (Request Body)
+# ==========================================
+class SetDefaultIdentitySchema(BaseModel):
+    default_shop_id: int = Field(
+        ..., 
+        description="默认店铺 ID", 
+        example=1, 
+        gt=0
+    )
+    default_staff_id: int = Field(
+        ..., 
+        description="默认员工身份 ID (Staff ID)", 
+        example=26, 
+        gt=0
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "default_shop_id": 1,
+                "default_staff_id": 26
+            }
+        }
+
+
+# ==========================================
+# 2. 设置默认店铺/身份 响应体 (Response Body)
+# ==========================================
+class SetDefaultIdentityResponse(BaseModel):
+    code: int = Field(200, description="状态码", example=200)
+    message: str = Field("默认身份设置成功", description="提示信息")
+    data: Optional[dict] = Field(None, description="返回数据，无特殊需返回则为 null")
