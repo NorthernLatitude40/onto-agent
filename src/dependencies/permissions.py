@@ -11,7 +11,9 @@ from src.common.database import get_db
 from src.common.exceptions import BusinessException, PermissionDeniedException
 from src.common.dict import ShopRole
 from src.common.i18n import ErrorCode
+from src.common.logger import get_logger
 
+logger = get_logger("API_SERVICE")
 
 # 定义默认的开发/测试店铺 ID
 DEFAULT_TEST_SHOP_ID = 1
@@ -42,7 +44,8 @@ class ShopRoleChecker:
             # 如果超管在该店铺有真实档案则拿真实档案，没有则构建临时全权档案
             admin_staff = db.query(StaffModel).filter(
                 StaffModel.user_id == current_user.id,
-                StaffModel.shop_id == target_shop_id
+                StaffModel.shop_id == target_shop_id,
+                StaffModel.id == staff_id
             ).first()
 
             if not admin_staff:
@@ -57,8 +60,9 @@ class ShopRoleChecker:
             return admin_staff
 
         # ---------------------------------------------------------
-        # 2. 从 StaffModel 单表中精准定位员工档案 (替代原来的 ShopStaffModel)
+        # 2. 从 StaffModel 单表中精准定位员工档案 
         # ---------------------------------------------------------
+        logger.info("从 StaffModel 单表中精准定位员工档案usr_id, shopid, staffid",current_user.id,target_shop_id,staff_id)
         staff = db.query(StaffModel).filter(
             StaffModel.user_id == current_user.id,
             StaffModel.shop_id == target_shop_id,

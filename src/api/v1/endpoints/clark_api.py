@@ -122,7 +122,7 @@ def create_staff(
 @router.put("", response_model=StaffResponse, summary="统一更新员工资讯/状态/角色")
 def update_staff(
     payload: StaffUpdateSchema,
-    staff_id: int = Header(..., alias="x-staff-id"), # 🌟 直接从 Header 提取
+    staff_id: int = Header(..., alias="X-Staff-Id"), # 🌟 直接从 Header 提取
     shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
     db: Session = Depends(get_db),
     current_user: StaffModel = Depends(allow_shop_manager), # 当前操作者的 StaffModel 实例
