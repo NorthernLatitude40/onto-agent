@@ -136,7 +136,7 @@ def update_staff(
     # 1. 单表查询【目标员工】在【当前店铺】的档案 (StaffModel)
     # ---------------------------------------------------------
     target_staff = db.query(StaffModel).filter(
-        StaffModel.id == staff_id,
+        StaffModel.id == payload.id,
         StaffModel.shop_id == target_shop_id
     ).first()
 
