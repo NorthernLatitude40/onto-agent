@@ -8,25 +8,32 @@ import hashlib
 import ast
 import jwt
 import httpx
-from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
-from sqlalchemy.orm import Session
-from src.common.database import get_db # 获取数据库连接
-from src.service.inventory_service import InventoryService
-from datetime import datetime, date, time as dt_time
-from sqlalchemy import func
-from src.model.models import InventoryModel as Inventory, FinancialRecord
-
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import func, case, or_
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
+from datetime import datetime, date, time as dt_time, timedelta
+
+from src.common.database import get_db # 获取数据库连接
+from src.service.inventory_service import InventoryService
+from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
 from src.core.shop_agent.system import ShopAgentSystem
-from src.model.user_model import UserModel
 from src.common.dict import ShopRole
+from src.model.models import FinancialRecord
+from src.model.inventory_model import InventoryModel as Inventory
+from src.model.user_model import UserModel
 from src.model.shop_model import ShopModel
 from src.model.staff_model import StaffModel
+from src.model.order_model import OutboundOrder
 from src.model.schema import  CreateInviteRequest, AcceptInviteRequest, CreateStaffRequest
 from src.model.shop_schema import ShopResponse, CreateShopPayload, UpdateShopPayload
+from src.model.partner_model import Partner
+from src.model.models import (
+    FinancialRecord, 
+    OutboundOrderItem
+)
+from src.model.inventory_model import InventoryModel
 from src.api.auth_api import get_current_user, create_access_token
 from src.common.exceptions import BusinessException
 from src.config.config import settings
@@ -34,18 +41,9 @@ from src.dependencies.permissions import allow_shop_manager, allow_shop_staff
 from src.model.clark_schema import StaffResponse
 from src.model.dashboard_schema import DashboardOverviewResponse
 from src.common.i18n import ErrorCode, get_i18n_message
-
-# 引入你的数据库连接、Session依赖与 ORM 模型
-from src.common.database import get_db
-from src.model.models import (
-    InventoryModel, 
-    FinancialRecord, 
-    OutboundOrder, 
-    OutboundOrderItem, 
-    Partner  # ⬅️ 必须显式 import 导入进来！
-)
 from src.common.redis_client import redis_client
 from src.model.inventory_schema import StockListResponse, SellDeviceResponse
+
 
 logger = logging.getLogger(__name__)
 
@@ -57,75 +55,210 @@ dashboard_router = APIRouter(prefix="/api/v1/dashboard", tags=["首页看板"])
     "/overview",
     response_model=DashboardOverviewResponse,
     status_code=status.HTTP_200_OK,
-    summary="获取首页概览数据"
+    summary="获取首页概览与报表趋势数据"
 )
 def get_dashboard_overview(
+    # 使用 alias="range" 确保前端依然传递 ?range=today，但在函数内部使用 range_type 避免覆盖内置 range()
+    range_type: str = Query(
+        "today",
+        alias="range",
+        description="统计时间维度: today (24小时按时段/今日), 7days (近7天按日), month (近6个月按月)"
+    ),
     shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
     db: Session = Depends(get_db),
-    current_staff=Depends(allow_shop_manager)  # ShopRoleChecker 校验后返回当前 Staff/店铺上下文
+    current_staff = Depends(allow_shop_manager)
 ):
-    """
-    提供给小程序首页【收支概览卡片】的实时统计数据：
-    - 今日收入 (type=1)
-    - 今日支出 (type=2)
-    - 今日毛利 (sum(profit))
-    - 在库设备总台数 (status=1 且数量总和)
-    """
-    # 1. 确定最终生效的 shop_id（优先使用 Header 传入，若未传则使用权限依赖项自动处理/降级后的 shop_id）
     target_shop_id = shop_id or getattr(current_staff, "shop_id", 1)
 
-    # 2. 获取今天的起始与结束时间范围
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
+    now = datetime.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-    # 3. 查询【在库设备台数】(强制加上店铺隔离条件)
+    # 1. 确定时间范围与分组时间格式 (Date Format)
+    if range_type == "7days":
+        start_time = today_start - timedelta(days=6)
+        end_time = today_end
+        # 生成连续的日期 Key 列表 (用于后续补零)
+        date_keys = [(start_time + timedelta(days=i)).strftime("%m-%d") for i in range(7)]
+        # SQL 日期格式化表达 (PostgreSQL/MySQL 兼容写法)
+        date_group_expr = func.to_char(FinancialRecord.record_time, 'MM-DD')
+
+    elif range_type == "month":
+        # 近 6 个月趋势：计算 5 个月前的 1 号
+        start_month = (now.month - 5) if now.month > 5 else (now.month + 7)
+        start_year = now.year if now.month > 5 else (now.year - 1)
+        start_time = datetime(start_year, start_month, 1, 0, 0, 0)
+        end_time = today_end
+
+        # 生成近 6 个月月份 Key 列表
+        date_keys = []
+        curr = start_time
+        while curr <= now:
+            date_keys.append(curr.strftime("%Y-%m"))
+            # 递增一个月
+            next_month = curr.month % 12 + 1
+            next_year = curr.year + (1 if next_month == 1 else 0)
+            curr = datetime(next_year, next_month, 1)
+
+        date_group_expr = func.to_char(FinancialRecord.record_time, 'YYYY-MM')
+
+    else:
+        # range_type == "today" (默认今日)
+        start_time = today_start
+        end_time = today_end
+        # 今日 24 小时节点: 00:00, 01:00... 23:00
+        date_keys = [f"{i:02d}:00" for i in range(24)]
+        date_group_expr = func.to_char(FinancialRecord.record_time, 'HH24:00')
+
+    # 2. 查询【在库设备总数】
     in_stock_count = db.query(
         func.coalesce(func.sum(Inventory.stock_quantity), 0)
     ).filter(
-        Inventory.shop_id == target_shop_id,  # 🔒 店铺数据隔离
+        Inventory.shop_id == target_shop_id,
         Inventory.status == 1
     ).scalar()
 
-    # 4. 计算【今日总收入】(type = 1 收入，强制加上店铺隔离条件)
-    today_income = db.query(
-        func.coalesce(func.sum(FinancialRecord.amount), 0.0)
+    # 3. 总体统计指标 (当前 range_type 汇总)
+    total_stats = db.query(
+        func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.amount), else_=0.0)), 0.0).label("income"),
+        func.coalesce(func.sum(case((FinancialRecord.type == 2, FinancialRecord.amount), else_=0.0)), 0.0).label("expense"),
+        func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.profit), else_=0.0)), 0.0).label("profit")
     ).filter(
-        FinancialRecord.shop_id == target_shop_id,  # 🔒 店铺数据隔离
-        FinancialRecord.type == 1,
-        FinancialRecord.record_time >= today_start,
-        FinancialRecord.record_time <= today_end
-    ).scalar()
+        FinancialRecord.shop_id == target_shop_id,
+        FinancialRecord.record_time >= start_time,
+        FinancialRecord.record_time <= end_time
+    ).first()
 
-    # 5. 计算【今日总支出】(type = 2 支出，强制加上店铺隔离条件)
-    today_expense = db.query(
-        func.coalesce(func.sum(FinancialRecord.amount), 0.0)
+    income = float(total_stats.income or 0.0)
+    expense = float(total_stats.expense or 0.0)
+    profit = float(total_stats.profit or 0.0)
+
+    # 4. 查询该时间段内的成交单数
+    order_count = db.query(
+        func.count(OutboundOrder.id)
     ).filter(
-        FinancialRecord.shop_id == target_shop_id,  # 🔒 店铺数据隔离
-        FinancialRecord.type == 2,
-        FinancialRecord.record_time >= today_start,
-        FinancialRecord.record_time <= today_end
-    ).scalar()
+        OutboundOrder.shop_id == target_shop_id,
+        OutboundOrder.payment_status == 1,
+        OutboundOrder.created_at >= start_time,
+        OutboundOrder.created_at <= end_time
+    ).scalar() or 0
 
-    # 6. 计算【今日总毛利】(仅汇总销售收入类流水的 profit 字段)
-    today_profit = db.query(
-        func.coalesce(func.sum(FinancialRecord.profit), 0.0)
+    # 5. 趋势图表分组 SQL 查询 (Group By Date)
+    trend_query = db.query(
+        date_group_expr.label("date_group"),
+        func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.amount), else_=0.0)), 0.0).label("income"),
+        func.coalesce(func.sum(case((FinancialRecord.type == 2, FinancialRecord.amount), else_=0.0)), 0.0).label("expense"),
+        func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.profit), else_=0.0)), 0.0).label("profit")
     ).filter(
-        FinancialRecord.shop_id == target_shop_id,  # 🔒 店铺数据隔离
-        FinancialRecord.type == 1,
-        FinancialRecord.record_time >= today_start,
-        FinancialRecord.record_time <= today_end
-    ).scalar()
+        FinancialRecord.shop_id == target_shop_id,
+        FinancialRecord.record_time >= start_time,
+        FinancialRecord.record_time <= end_time
+    ).group_by(
+        date_group_expr
+    ).all()
 
-    # 7. 遵守 Bare Payload 规范：直接返回数据字典，由 FastAPI + Pydantic 自动序列化
+    # 将数据库查询结果转为字典格式映射
+    db_trend_map: Dict[str, dict] = {}
+    for row in trend_query:
+        group_key = str(row.date_group)
+        db_trend_map[group_key] = {
+            "income": round(float(row.income), 2),
+            "expense": round(float(row.expense), 2),
+            "profit": round(float(row.profit), 2)
+        }
+
+    # 6. 内存补齐缺失日期 (补零操作，确保 X 轴连续不移位)
+    trend_list: List[Dict] = []
+    for key in date_keys:
+        data = db_trend_map.get(key, {"income": 0.0, "expense": 0.0, "profit": 0.0})
+        trend_list.append({
+            "date": key,
+            "income": data["income"],
+            "expense": data["expense"],
+            "profit": data["profit"]
+        })
+
+    # 7. 返回组装完成的数据
     return {
-        "today_profit": round(float(today_profit), 2),
-        "today_income": round(float(today_income), 2),
-        "today_expense": round(float(today_expense), 2),
-        "in_stock_devices": int(in_stock_count)
+        "profit": round(profit, 2),
+        "income": round(income, 2),
+        "expense": round(expense, 2),
+        "order_count": int(order_count),
+        "in_stock_devices": int(in_stock_count),
+        "trend": trend_list,
+        "today_profit": round(profit, 2) if range_type == "today" else 0.0,
+        "today_income": round(income, 2) if range_type == "today" else 0.0,
+        "today_expense": round(expense, 2) if range_type == "today" else 0.0,
     }
 
+@dashboard_router.get("/search/global")
+def global_search(
+    q: str = Query(..., min_length=1, description="搜索关键字"),
+    x_shop_id: Optional[str] = Header(None, alias="X-Shop-Id"),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    if not x_shop_id:
+        raise HTTPException(status_code=400, detail="缺少店铺 ID (X-Shop-Id)")
 
+    keyword = f"%{q.strip()}%"
 
+    # 1. 检索在库设备（精准匹配你的 InventoryModel 字段：sn_code, title, spec, remark）
+    stocks_query = db.query(InventoryModel).filter(
+        InventoryModel.shop_id == x_shop_id,
+        or_(
+            InventoryModel.sn_code.ilike(keyword),
+            InventoryModel.title.ilike(keyword),
+            InventoryModel.spec.ilike(keyword),
+            InventoryModel.remark.ilike(keyword)
+        )
+    ).limit(20).all()
+
+    stocks_res = [
+        {
+            "id": str(stock.id),
+            "brand": "",                  # 你的模型里没有 brand，传空或合并到 title
+            "model_name": stock.title,    # 对应你的 title 字段
+            "imei": stock.sn_code,        # 对应你的 sn_code 串号
+            "status": "在库" if stock.status == 1 else "已售",
+            "cost_price": float(stock.purchase_price or 0), # 对应 purchase_price
+            "price": float(stock.selling_price or 0),       # 对应 selling_price
+            "created_at": stock.created_at.strftime("%Y-%m-%d %H:%M") if stock.created_at else ""
+        }
+        for stock in stocks_query
+    ]
+
+    # 2. 检索订单（匹配订单号、客户姓名、客户手机号）
+    orders_query = db.query(OutboundOrder).outerjoin(Partner).filter(
+        OutboundOrder.shop_id == x_shop_id,
+        or_(
+            OutboundOrder.order_sn.ilike(keyword),
+            Partner.name.ilike(keyword),
+            Partner.phone.ilike(keyword)
+        )
+    ).limit(20).all()
+
+    orders_res = [
+        {
+            "id": str(order.id),
+            "order_no": order.order_no,
+            "status": order.status,  # 如: 'completed', 'pending'
+            "customer_name": order.customer.name if order.customer else "散客",
+            "phone": order.customer.phone if order.customer else "",
+            "total_amount": float(order.total_amount or 0),
+            "created_at": order.created_at.strftime("%Y-%m-%d %H:%M") if order.created_at else ""
+        }
+        for order in orders_query
+    ]
+
+    # 3. 返回整合结果
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "stocks": stocks_res,
+            "orders": orders_res
+        }
+    }
 
 
 

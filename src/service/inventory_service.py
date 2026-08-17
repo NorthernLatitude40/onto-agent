@@ -1,7 +1,7 @@
 # src/services/inventory_service.py
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
-from src.model.models import InventoryModel
+from src.model.inventory_model import InventoryModel
 
 class InventoryService:
     staticmethod

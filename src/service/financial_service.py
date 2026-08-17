@@ -2,7 +2,8 @@ from datetime import datetime, date, time, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 # 导入你的真实模型
-from src.model.models import FinancialRecord, InventoryModel as Inventory
+from src.model.models import FinancialRecord
+from src.model.inventory_model import InventoryModel as Inventory
 
 class FinancialService:
 
