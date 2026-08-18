@@ -37,6 +37,7 @@ dependencies = [
     "psycopg2-binary>=2.9.12",
     "redis>=8.1.0",
     "pyjwt>=2.13.0",
+    "asyncpg>=0.31.0",
 ]
 
 [dependency-groups]

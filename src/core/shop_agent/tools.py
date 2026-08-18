@@ -14,11 +14,11 @@ from src.service.inventory_service import InventoryService
 from src.service.financial_service import FinancialService
 from src.common.database import SessionLocal, Base, engine
 from src.model.models import (
-    FinancialRecord, 
-    OutboundOrderItem
+    FinancialRecord
 )
 from src.model.inventory_model import InventoryModel
-from src.model.order_model import OutboundOrder
+from src.model.order_model import OutboundOrderModel as OutboundOrder
+from src.model.order_item_model import OutboundOrderItem
 from src.model.tools_schema import QueryShopDataInput
 from langchain_core.tools import tool, InjectedToolArg
 from typing import Optional, Annotated
