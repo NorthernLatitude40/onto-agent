@@ -19,6 +19,7 @@ class FinancialRecord(Base):
     payment_method = Column(String(30), default="微信")
     record_time = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_by = Column(BigInteger, nullable=True)  # 👈 補上此定義
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
     remark = Column(String(255), nullable=True)
     # 💡 补上 shop_id 字段定义
     shop_id = Column(

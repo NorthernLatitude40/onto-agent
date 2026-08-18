@@ -11,12 +11,13 @@ import httpx
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, or_, desc
+from sqlalchemy import func, case, or_, desc, select, update
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
 from datetime import datetime, date, time as dt_time, timedelta
 from decimal import Decimal
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.common.database import get_db # 获取数据库连接
+from src.common.database import get_db, get_db_async # 获取数据库连接
 from src.service.inventory_service import InventoryService
 from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
 from src.core.shop_agent.system import ShopAgentSystem
@@ -45,8 +46,9 @@ from src.model.clark_schema import StaffResponse
 from src.model.dashboard_schema import DashboardOverviewResponse
 from src.common.i18n import ErrorCode, get_i18n_message
 from src.common.redis_client import redis_client
-from src.model.inventory_schema import StockListResponse, SellDeviceResponse, AddDeviceConfirmPayload, CreatePurchaseOrderPayload
+from src.model.inventory_schema import StockListResponse, SellDeviceResponse, AddDeviceConfirmPayload, CreatePurchaseOrderPayload, ReturnSalesRequest
 from src.api.auth_api import get_current_staff   # 直連 staff 的驗證依賴
+from src.common.generate_sn import generate_sn
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +60,14 @@ async def confirm_add_device(
     payload: CreatePurchaseOrderPayload, 
     db: Session = Depends(get_db),
     # 提取請求頭裡的 X-Shop-Id
-    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id")
+    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id"),
+    current_staff: StaffModel = Depends(get_current_staff)
 ):
     """
     前端提交待入庫單據時調用的接口：
-    1. 寫入 inventory 表（根據 items 中的機型與串號列表批量落庫）
-    2. 在 financial_record 表創建一筆對應的採購支出流水 (type=2)
+    1. 自動補全或創建往來單位 (Partner)
+    2. 寫入 inventory 表（根據 items 中的機型與串號列表批量落庫）
+    3. 在 financial_record 表創建一筆對應的採購支出流水 (type=2)
     """
     # 1. 檢驗 shop_id
     if not x_shop_id:
@@ -86,6 +90,32 @@ async def confirm_add_device(
         )
 
     try:
+        # ==================== 【新增邏輯】處理 Partner (客戶/供應商) ====================
+        partner_id = payload.partner_id
+        phone = (payload.supplier_phone or "").strip()
+        name = (payload.supplier_name or "").strip()
+
+        # 如果前端沒有傳 partner_id，且有提供手機號碼，進行查重或自動新建
+        if not partner_id and phone:
+            existing_partner = db.query(Partner).filter(Partner.phone == phone).first()
+            if existing_partner:
+                partner_id = existing_partner.id
+            else:
+                # 建立新 Partner（預設名稱若未提供則自動設為 "客戶_{手機後4碼}" 或 "未命名"）
+                default_name = name if name else f"客戶_{phone[-4:] if len(phone) >= 4 else phone}"
+                new_partner = Partner(
+                    name=default_name,
+                    phone=phone,
+                    type=2,  # 預設 2-供應商 (或依業務需求設為 3-二者皆是)
+                    receivable_amount=0.00,
+                    payable_amount=0.00,
+                    remark="設備入庫時自動創建"
+                )
+                db.add(new_partner)
+                db.flush()  # 刷入 DB 以獲取自動生成的 new_partner.id
+                partner_id = new_partner.id
+        # ==============================================================================
+
         # 判斷單據狀態 (1-待驗收入庫，2-已驗收入庫)
         inventory_status = 1 if payload.status == "pending" else 2
 
@@ -101,10 +131,10 @@ async def confirm_add_device(
                     title=item.model_name,
                     sn_code=sn if sn else None,
                     purchase_price=item.cost_price,
-                    category=2,                           # 2 - 二手機
-                    status=inventory_status,             # 1 - 待入庫/在庫
-                    supplier_id=payload.partner_id,      # 往來單位 ID (客戶/供應商)
-                    created_by=payload.operator_id,    # 經手人 ID
+                    category=item.type,                          # 2 - 二手機
+                    status=inventory_status,                     # 1 - 待入庫/在庫
+                    supplier_id=partner_id,                      # 👈 寫入自動查詢/創建後拿到的 partner_id
+                    created_by=current_staff.id,                 # 經手人 ID
                     shop_id=x_shop_id,
                     remark=f"來源電話: {payload.supplier_phone}"
                 )
@@ -138,6 +168,7 @@ async def confirm_add_device(
             "message": "設備單據成功提交並記帳！",
             "data": {
                 "record_sn": record_sn,
+                "partner_id": partner_id,                # 帶回最終綁定的 Partner ID
                 "total_amount": payload.total_amount,
                 "device_count": len(created_devices),
                 "status": payload.status
@@ -179,7 +210,7 @@ def create_outbound_order(
         raise HTTPException(status_code=400, detail="部分設備不存在或不屬於當前門店")
 
     for inv in inventories:
-        if inv.status != 1:  # 1: 在庫
+        if inv.status != 2:  # 1: 在庫
             raise HTTPException(status_code=400, detail=f"設備 (SN: {inv.sn_code}) 非在庫狀態")
 
     try:
@@ -543,3 +574,159 @@ def search_inventory_by_sn(
         "retail_price": float(inventory.retail_price) if getattr(inventory, 'retail_price', None) else 0.0,
         "created_at": inventory.created_at.strftime("%Y-%m-%d %H:%M:%S") if getattr(inventory, 'created_at', None) else None
     }
+
+@router.get("/detail/{order_id}")
+async def get_sales_detail(
+    order_id: int, 
+    x_shop_id: Optional[str] = Header(None, alias="X-Shop-Id"),
+    db: AsyncSession = Depends(get_db_async)
+):
+    """獲取銷售單詳情"""
+    # 1. 查詢主單據
+    stmt = select(OutboundOrderModel).where(OutboundOrderModel.id == order_id)
+    if x_shop_id:
+        stmt = stmt.where(OutboundOrderModel.shop_id == int(x_shop_id))
+    
+    result = await db.execute(stmt)
+    order = result.scalars().first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="找不到該銷售單據")
+
+    # 2. 查詢客戶資訊
+    partner_name, partner_phone = "散客", "-"
+    if order.customer_id:
+        p_stmt = select(Partner).where(Partner.id == order.customer_id)
+        p_res = await db.execute(p_stmt)
+        partner = p_res.scalars().first()
+        if partner:
+            partner_name = partner.name or partner_name
+            partner_phone = partner.phone or partner_phone
+
+    # 3. 關聯查詢 OutboundOrderItem 與 InventoryModel 獲取設備名稱與 IMEI/SN
+    items_stmt = (
+        select(
+            OutboundOrderItem.selling_price,
+            InventoryModel.title,
+            InventoryModel.sn_code,
+            InventoryModel.spec
+        )
+        .join(InventoryModel, OutboundOrderItem.inventory_id == InventoryModel.id)
+        .where(OutboundOrderItem.outbound_order_id == order_id)
+    )
+    
+    items_res = await db.execute(items_stmt)
+    item_rows = items_res.all()
+
+    devices = []
+    for item in item_rows:
+        # 拼接名稱與規格（如 "iPhone 15 Pro 256G"）
+        model_name = item.title or "未命名設備"
+        if item.spec:
+            model_name = f"{model_name} {item.spec}"
+
+        devices.append({
+            "model_name": model_name,
+            "imei": item.sn_code or "-",
+            "price": float(item.selling_price or 0.0)
+        })
+
+    # 4. 組裝回傳數據
+    return {
+        "code": 200,
+        "msg": "success",
+        "data": {
+            "id": order.id,
+            "order_sn": f"SO-{order.id}",
+            "status": order.payment_status,  # 1: 完成, 2: 已退貨
+            "partner_name": partner_name,
+            "partner_phone": partner_phone,
+            "total_amount": float(order.total_amount or getattr(order, "selling_price", 0.0) or 0.0),
+            "created_at": order.created_at.strftime("%Y-%m-%d %H:%M:%S") if order.created_at else "",
+            "devices": devices
+        }
+    }
+
+@router.post("/return")
+async def process_sales_return(
+    req: ReturnSalesRequest,
+    x_shop_id: Optional[str] = Header(None, alias="X-Shop-Id"),
+    db: AsyncSession = Depends(get_db_async)
+):
+    """辦理退貨：更新銷售單狀態、查出明細還原庫存、記錄財務退款支出"""
+    
+    # 1. 查詢銷售主單 (OutboundOrderModel)
+    stmt = select(OutboundOrderModel).where(OutboundOrderModel.id == req.id)
+    if x_shop_id:
+        stmt = stmt.where(OutboundOrderModel.shop_id == int(x_shop_id))
+    
+    result = await db.execute(stmt)
+    order = result.scalars().first()
+
+    if not order:
+        return {"code": 404, "msg": "銷售單據不存在"}
+
+    if order.payment_status == 0:
+        return {"code": 400, "msg": "該單據已完成退貨，請勿重複操作"}
+
+    # 2. 查詢該銷售單下的所有明細項 (OutboundOrderItem)
+    items_stmt = select(OutboundOrderItem).where(OutboundOrderItem.outbound_order_id == order.id)
+    items_res = await db.execute(items_stmt)
+    order_items = items_res.scalars().all()
+
+    if not order_items:
+        return {"code": 400, "msg": "該銷售單下無任何商品明細，無法退貨"}
+
+    try:
+        # 3. 收集所有關聯的 inventory_id，並批量還原庫存狀態
+        inventory_ids = [item.inventory_id for item in order_items]
+        
+        # 批量更新 InventoryModel：將狀態改為 1 (在售/在庫)，並還原庫存數量
+        inv_update_stmt = (
+            update(InventoryModel)
+            .where(InventoryModel.id.in_(inventory_ids))
+            .values(
+                status=1,  # 1: 在庫
+                stock_quantity=InventoryModel.stock_quantity + 1,
+                updated_at=datetime.now()
+            )
+        )
+        await db.execute(inv_update_stmt)
+
+        # 4. 計算總退款金額 (或直接使用 order.total_amount)
+        refund_amount = sum(float(item.selling_price or 0.0) for item in order_items)
+        if hasattr(order, 'total_amount') and order.total_amount:
+            refund_amount = float(order.total_amount)
+
+        # 5. 更新銷售主單狀態為 2 (已退貨)
+        order.status = 2  # 2: 已退貨
+        order.updated_at = datetime.now()
+
+        # 6. 生成退款財務支出記錄
+        refund_record = FinancialRecord(
+            shop_id=order.shop_id,
+            type=2,
+            record_sn=generate_sn("SN"),
+            category="sales_refund",
+            amount=refund_amount,
+            remark=f"銷售單 SO-{order.id} 退貨退款",
+            created_at=datetime.now()
+        )
+        db.add(refund_record)
+
+        # 7. 提交事務
+        await db.commit()
+
+        return {
+            "code": 200,
+            "msg": "退貨辦理成功",
+            "data": {
+                "id": order.id, 
+                "status": order.status,
+                "refund_amount": refund_amount,
+                "returned_items_count": len(inventory_ids)
+            }
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"退貨處理失敗: {str(e)}")

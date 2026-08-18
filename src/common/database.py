@@ -29,7 +29,14 @@ def get_db():
 Base.metadata.create_all(bind=engine)
 
 
-engine_async = create_async_engine(settings.DATABASE_URL_ASYNC, echo=True)
+engine_async = create_async_engine(
+        settings.DATABASE_URL_ASYNC, 
+        echo=True,
+        connect_args={
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0
+        }
+    )
 AsyncSessionLocal = async_sessionmaker(engine_async, class_=AsyncSession, expire_on_commit=False)
 
 # 2. get_db 需為非同步產生器
