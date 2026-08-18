@@ -3,10 +3,10 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, BigInteger, String, Numeric, DateTime, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 from src.config.config import settings
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from src.config.config import settings
 
-load_dotenv()
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, echo=settings.is_development)
+engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True, echo=settings.is_development)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -27,3 +27,12 @@ def get_db():
 
 # 自动创建表结构（如果表不存在）
 Base.metadata.create_all(bind=engine)
+
+
+engine_async = create_async_engine(settings.DATABASE_URL_ASYNC, echo=True)
+AsyncSessionLocal = async_sessionmaker(engine_async, class_=AsyncSession, expire_on_commit=False)
+
+# 2. get_db 需為非同步產生器
+async def get_db_async():
+    async with AsyncSessionLocal() as session:
+        yield session

@@ -18,6 +18,7 @@ class FinancialRecord(Base):
     profit = Column(Numeric(10, 2), nullable=False, default=0.00) # 毛利
     payment_method = Column(String(30), default="微信")
     record_time = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_by = Column(BigInteger, nullable=True)  # 👈 補上此定義
     remark = Column(String(255), nullable=True)
     # 💡 补上 shop_id 字段定义
     shop_id = Column(
@@ -32,17 +33,5 @@ class FinancialRecord(Base):
 
 
 
-# ==========================================
-# 出库订单明细表 (outbound_order_item)
-# ==========================================
-class OutboundOrderItem(Base):
-    __tablename__ = 'outbound_order_item'
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    outbound_order_id = Column(BigInteger, ForeignKey('outbound_order.id', ondelete='CASCADE'), nullable=False)
-    inventory_id = Column(BigInteger, ForeignKey('inventory.id'), nullable=False)
-    quantity = Column(Integer, nullable=False, default=1)
-    purchase_price = Column(Numeric(10, 2), nullable=False, default=0.00) # 成本
-    selling_price = Column(Numeric(10, 2), nullable=False, default=0.00)  # 售价
-    profit = Column(Numeric(10, 2), nullable=False, default=0.00)         # 毛利
 

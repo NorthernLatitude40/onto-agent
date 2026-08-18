@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field
+from decimal import Decimal
 
 from src.common.database import get_db
 from src.api.auth_api import get_current_user    # 获取当前登录用户/店铺权限
@@ -27,3 +28,42 @@ class SellDeviceResponse(BaseModel):
     order_sn: str = Field(..., description="生成的出库订单号")
     sell_price: float = Field(..., description="实际出售价格")
     profit: float = Field(..., description="本次交易利润")
+
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
+# 1. 單個設備明細模型
+class PurchaseOrderItemPayload(BaseModel):
+    model_name: str = Field(..., description="設備機型名稱，如：iPhone 15 Pro")
+    serials: List[str] = Field(default_factory=list, description="串號/IMEI/SN列表")
+    cost_price: float = Field(0.0, description="進貨/回收單價")
+
+
+# 2. 待入庫單據主 Payload 模型 (對應前端 payload)
+class CreatePurchaseOrderPayload(BaseModel):
+    supplier_phone: str = Field(..., description="聯繫電話")
+    supplier_name: Optional[str] = Field(default="", description="姓名/單位名稱")
+    partner_id: Optional[int] = Field(default=None, description="往來單位ID（客戶/供應商ID）")
+    operator_id: Optional[int] = Field(default=None, description="經手人/當前登入員工ID")
+    total_amount: float = Field(0.0, description="採購總額")
+    status: str = Field(default="pending", description="單據狀態：pending-待入庫 / completed-已入庫")
+    items: List[PurchaseOrderItemPayload] = Field(..., description="設備明細列表")
+
+class AddDeviceConfirmPayload(BaseModel):
+    model: str = Field(..., description="设备型号，如：iPhone 13 128G")
+    cost: float = Field(..., description="采购/回收成本价")
+    partner_id: Optional[int] = Field(default=None, description="往来单位ID（客户/供应商ID）")
+    color: Optional[str] = Field(default="未知", description="设备颜色")
+    notes: Optional[str] = Field(default="二手回收", description="备注信息")
+
+class SalesItemPayload(BaseModel):
+    inventory_id: int = Field(..., description="庫存設備 ID")
+    sale_price: Decimal = Field(..., gt=0, description="實際銷售價格")
+
+
+class CreateOutboundOrderPayload(BaseModel):
+    customer_id: Optional[int] = Field(None, description="客戶 ID (partner 表)")
+    outbound_type: int = Field(1, description="出貨類型: 1-零售銷售, 2-批發出貨")
+    items: List[SalesItemPayload] = Field(..., min_items=1, description="銷售商品列表")
+    remark: Optional[str] = Field(None, description="備註資訊")
+    auto_deliver: Optional[bool] = True  # 👈 補上此欄位（預設為 True 或 False）

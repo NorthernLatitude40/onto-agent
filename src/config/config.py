@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     UPLOAD_DIR: Path = Path(os.getenv("UPLOAD_DIR", BASE_DIR / "uploads"))
     EXPORTS_DIR: Path = Path(os.getenv("EXPORTS_DIR", BASE_DIR / "exports"))
 
+    DATABASE_URL: str = os.getenv("DATABASE_URL")
+    DATABASE_URL_ASYNC: str = os.getenv("DATABASE_URL_ASYNC")
+
 
 
     # --- Pydantic Settings 配置项 ---
