@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from src.common.database import get_db
 from src.api.auth_api import get_current_user    # 获取当前登录用户/店铺权限
+from src.common.dict import DeviceTypeEnum
 
 class StockItemOut(BaseModel):
     id: int
@@ -34,6 +35,7 @@ from typing import List, Optional
 
 # 1. 單個設備明細模型
 class PurchaseOrderItemPayload(BaseModel):
+    type: DeviceTypeEnum = Field(..., description="分類類型: 1=新機, 2=二手機, 3=配件")
     model_name: str = Field(..., description="設備機型名稱，如：iPhone 15 Pro")
     serials: List[str] = Field(default_factory=list, description="串號/IMEI/SN列表")
     cost_price: float = Field(0.0, description="進貨/回收單價")
@@ -67,3 +69,21 @@ class CreateOutboundOrderPayload(BaseModel):
     items: List[SalesItemPayload] = Field(..., min_items=1, description="銷售商品列表")
     remark: Optional[str] = Field(None, description="備註資訊")
     auto_deliver: Optional[bool] = True  # 👈 補上此欄位（預設為 True 或 False）
+
+class DeviceItem(BaseModel):
+    model_name: str
+    imei: str
+    price: float
+
+class SalesDetailResponse(BaseModel):
+    id: int
+    order_sn: str
+    status: int  # 1: completed, 2: returned
+    partner_name: str
+    partner_phone: str
+    total_amount: float
+    created_at: str
+    devices: List[DeviceItem]
+
+class ReturnSalesRequest(BaseModel):
+    id: int

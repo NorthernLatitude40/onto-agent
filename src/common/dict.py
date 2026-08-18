@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import Enum, IntEnum
 
 
 class ShopRole(str, Enum):
@@ -17,3 +17,8 @@ class ShopRole(str, Enum):
             ShopRole.STAFF: "店员",
         }
         return mapping.get(self, "店员")
+
+class DeviceTypeEnum(IntEnum):
+    NEW = 1        # 新機
+    USED = 2       # 二手機
+    ACCESSORY = 3  # 配件

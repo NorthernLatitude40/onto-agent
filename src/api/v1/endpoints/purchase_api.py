@@ -1,7 +1,8 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
+from datetime import datetime
 
 from src.common.database import get_db
 from src.model.inventory_model import InventoryModel  # 庫存/設備表
@@ -9,6 +10,7 @@ from src.model.partner_model import Partner as  PartnerModel     # 供應商/合
 from src.model.staff_model import StaffModel          # 員工表
 from src.api.auth_api import get_current_staff   # 直連 staff 的驗證依賴
 from src.model.order_model import OutboundOrderModel
+from src.model.purchase_schema import DeviceItem, PurchaseDetailResponse, ConfirmInboundRequest
 
 
 router = APIRouter()
@@ -17,6 +19,7 @@ router = APIRouter()
 @router.get("/list", summary="獲取進銷存單據列表 (進貨/銷售二合一)")
 def get_order_list(
     order_type: Optional[int] = Query(None, description="單據類型: 1-進貨/入庫, 2-銷售/出庫 (不傳則查詢全部)"),
+    status: Optional[int] = Query(None, description="1-未完成入庫，2-已完成入庫"),
     keyword: Optional[str] = Query(None, description="關鍵字: 單號/IMEI/合作方名稱/電話"),
     page: int = Query(1, ge=1, description="頁碼"),
     page_size: int = Query(20, ge=1, le=100, description="每頁筆數"),
@@ -36,7 +39,9 @@ def get_order_list(
         p_query = (
             db.query(InventoryModel, PartnerModel)
             .outerjoin(PartnerModel, InventoryModel.supplier_id == PartnerModel.id)
-            .filter(InventoryModel.shop_id == shop_id)
+            .filter(InventoryModel.shop_id == shop_id,
+                    InventoryModel.status == status
+                    )
         )
         if kw:
             p_query = p_query.filter(
@@ -50,8 +55,10 @@ def get_order_list(
         for inv, supplier in p_query.all():
             all_orders.append({
                 "id": inv.id,
+                "title": inv.title,
                 "order_sn": f"IN-{inv.id}",
                 "order_type": 1,  # 1: 進貨
+                "category": inv.category,
                 "type_name": "進貨入庫",
                 "partner_name": supplier.name if supplier else "未知供應商",
                 "partner_phone": supplier.phone if supplier else "-",
@@ -110,3 +117,85 @@ def get_order_list(
         "page_size": page_size,
         "items": paged_items
     }
+
+@router.get("/detail/{inv_id}")
+def get_purchase_detail(inv_id: int, db: Session = Depends(get_db)):
+    """
+    1. 獲取進貨單據詳情
+    """
+    # 1. 查詢庫存主記錄
+    inv = db.query(InventoryModel).filter(InventoryModel.id == inv_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="找不到該進貨單據")
+
+    # 2. 查詢關聯的供應商資訊
+    partner_name = "未知供應商"
+    partner_phone = "-"
+    if inv.supplier_id:
+        supplier = db.query(PartnerModel).filter(PartnerModel.id == inv.supplier_id).first()
+        if supplier:
+            partner_name = supplier.name or partner_name
+            partner_phone = supplier.phone or partner_phone
+
+    # 3. 組合串號/設備清單 (假設 imei 存在 inv.imei 或關聯表)
+    device_list = []
+    if inv.sn_code:
+        device_list.append({"imei": inv.sn_code})
+
+    items = [
+        {
+            "model_name": inv.title or inv.model_name or "未知機型",
+            "devices": device_list
+        }
+    ]
+
+    # 4. 構建回傳格式
+    return {
+        "code": 200,
+        "msg": "success",
+        "data": {
+            "id": inv.id,
+            "order_sn": f"IN-{inv.id}",
+            "category": inv.category or 1,
+            "status": inv.status,  # 1: 待確認, 2: 已入庫
+            "partner_name": partner_name,
+            "partner_phone": partner_phone,
+            "total_amount": float(inv.purchase_price or 0.0),
+            "created_at": inv.created_at.strftime("%Y-%m-%d %H:%M:%S") if inv.created_at else "",
+            "items": items
+        }
+    }
+
+
+@router.post("/confirm-inbound")
+def confirm_inbound(req: ConfirmInboundRequest, db: Session = Depends(get_db)):
+    """
+    2. 確認入庫接口（將待確認 status=1 改為已入庫 status=2）
+    """
+    inv = db.query(InventoryModel).filter(InventoryModel.id == req.id).first()
+    if not inv:
+        return {"code": 404, "msg": "單據不存在"}
+
+    if inv.status == 2:
+        return {"code": 400, "msg": "該單據已完成入庫，請勿重複操作"}
+
+    try:
+        # 更新狀態為已入庫 (2)
+        inv.status = 2
+        inv.updated_at = datetime.now()
+        
+        # 若有相關庫存數量變更邏輯，在此處寫入
+        # db.add(inventory_stock) ...
+
+        db.commit()
+        return {
+            "code": 200,
+            "msg": "確認入庫成功",
+            "data": {"id": inv.id, "status": inv.status}
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"入庫失敗: {str(e)}"
+        )
