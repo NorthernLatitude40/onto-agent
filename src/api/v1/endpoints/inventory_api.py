@@ -49,7 +49,7 @@ from src.common.redis_client import redis_client
 from src.model.inventory_schema import StockListResponse, SellDeviceResponse, AddDeviceConfirmPayload, CreatePurchaseOrderPayload, ReturnSalesRequest
 from src.api.auth_api import get_current_staff   # 直連 staff 的驗證依賴
 from src.common.generate_sn import generate_sn
-from src.model.inventory_schema import UpdateStatusRequest
+from src.model.inventory_schema import UpdateStatusRequest,SellDeviceConfirmPayload
 from src.common.dict import StockStatusEnum
 
 logger = logging.getLogger(__name__)
@@ -200,33 +200,78 @@ def create_outbound_order(
     """
     shop_id = current_staff.shop_id
     total_amount = Decimal("0.00")
+    total_profit = Decimal("0.00")  # 初始化總毛利
     inventory_ids = [item.inventory_id for item in payload.items]
 
-    # 1. 檢查庫存狀態
-    inventories = (
-        db.query(InventoryModel)
-        .filter(InventoryModel.id.in_(inventory_ids), InventoryModel.shop_id == shop_id)
-        .all()
-    )
-
-    if len(inventories) != len(inventory_ids):
-        raise HTTPException(status_code=400, detail="部分設備不存在或不屬於當前門店")
-
-    for inv in inventories:
-        if inv.status != StockStatusEnum.IN_STOCK: 
-            raise HTTPException(status_code=400, detail=f"設備 (SN: {inv.sn_code}) 非在庫狀態")
+    if not inventory_ids:
+        raise HTTPException(status_code=400, detail="請至少選擇一項商品")
 
     try:
-        price_map = {item.inventory_id: item.sale_price for item in payload.items}
+        # 建立價格映射字典 {inventory_id: Decimal(sale_price)}
+        price_map = {item.inventory_id: Decimal(str(item.sale_price)) for item in payload.items}
+
+        # ---------------------------------------------------------
+        # 1. 查詢庫存並加【行鎖】(with_for_update) 防併發超賣
+        # ---------------------------------------------------------
+        inventories = (
+            db.query(InventoryModel)
+            .filter(
+                InventoryModel.id.in_(inventory_ids), 
+                InventoryModel.shop_id == shop_id,
+            )
+            .with_for_update()  # 正確加鎖位置
+            .all()
+        )
+
+        # 檢查數量是否匹配
+        if len(inventories) != len(inventory_ids):
+            raise HTTPException(status_code=400, detail="部分設備不存在或不屬於當前門店")
+
+        # ---------------------------------------------------------
+        # 2. 庫存狀態與數量雙重校驗 & 計算總金額與總毛利
+        # ---------------------------------------------------------
         for inv in inventories:
-            total_amount += price_map[inv.id]
+            # 狀態檢查
+            if inv.status != StockStatusEnum.IN_STOCK.value:
+                raise BusinessException(
+                    code=ErrorCode.DEVICE_NOT_FOUND_OR_SOLD,
+                    detail=f"設備 (SN: {inv.sn_code or inv.id}) 非在庫狀態或已被售出",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    type_url="https://api.yourdomain.com/errors/device-not-found",
+                )
+            
+            # 數量檢查
+            if inv.stock_quantity <= 0:
+                raise BusinessException(
+                    code=ErrorCode.DEVICE_NOT_FOUND_OR_SOLD,
+                    detail=f"設備 '{inv.title or inv.sn_code}' 庫存不足",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    type_url="https://api.yourdomain.com/errors/device-not-found",
+                )
 
+            # 累加總金額
+            item_price = price_map.get(inv.id, Decimal("0.00"))
+            cost_price = Decimal(str(inv.purchase_price or 0))
+            
+            total_amount += item_price
+            total_profit += (item_price - cost_price)  # 正確累加單台毛利至總毛利
+
+            # ---------------------------------------------------------
+            # 3. 若為現貨直接交貨 (auto_deliver=True)，扣減庫存並改狀態
+            # ---------------------------------------------------------
+            if payload.auto_deliver:
+                inv.stock_quantity -= 1
+                if inv.stock_quantity <= 0:
+                    inv.stock_quantity = 0
+                    inv.status = StockStatusEnum.SOLD.value  # 設為已售出 (Status 3)
+
+        # ---------------------------------------------------------
+        # 4. 生成出貨主單
+        # ---------------------------------------------------------
         outbound_no = f"OUT-{datetime.now().strftime('%Y%m%d%H%M%S')}-{current_staff.id}"
-        # order_status = 2 if payload.auto_deliver else 1  # 2: 已完成, 1: 待出庫
         is_auto_deliver = getattr(payload, 'auto_deliver', True)
-        order_status = 2 if is_auto_deliver else 1
+        order_status = 2 if is_auto_deliver else 1  # 2: 已完成, 1: 待出庫
 
-        # 2. 生成出貨主單
         order = OutboundOrderModel(
             order_sn=outbound_no,
             shop_id=shop_id,
@@ -237,9 +282,11 @@ def create_outbound_order(
             remark=payload.remark
         )
         db.add(order)
-        db.flush()
+        db.flush()  # 獲取 order.id
 
-        # 3. 建立出貨明細
+        # ---------------------------------------------------------
+        # 5. 建立出貨明細
+        # ---------------------------------------------------------
         for inv in inventories:
             order_item = OutboundOrderItem(
                 outbound_order_id=order.id,
@@ -248,19 +295,17 @@ def create_outbound_order(
             )
             db.add(order_item)
 
-            # 若直接交貨，更新庫存狀態 (2: 已售出)
-            if payload.auto_deliver:
-                inv.status = 2
-
-        fin_sn = f"FIN-{datetime.now().strftime('%Y%m%d%H%M%S')}-{current_staff.id}"
-
-        # 4. 若直接交貨，生成財務收入紀錄
-        if payload.auto_deliver:
+        # ---------------------------------------------------------
+        # 6. 若為直接交貨，生成財務收入紀錄 (帶入總毛利)
+        # ---------------------------------------------------------
+        if is_auto_deliver:
+            fin_sn = f"FIN-{datetime.now().strftime('%Y%m%d%H%M%S')}-{current_staff.id}"
             financial_record = FinancialRecord(
                 shop_id=shop_id,
                 type=1,  # 1: 收入
                 record_sn=fin_sn,
                 amount=total_amount,
+                profit=total_profit,  # 正確傳入整單的總毛利
                 category="sales",
                 business_id=order.id,
                 created_by=current_staff.id,
@@ -271,25 +316,30 @@ def create_outbound_order(
         db.commit()
         return {
             "code": 200,
-            "message": "開單成功" if payload.auto_deliver else "預訂單建立成功，等待出庫",
+            "message": "開單成功" if is_auto_deliver else "預訂單建立成功，等待出庫",
             "outbound_no": outbound_no,
             "id": order.id
         }
 
+    except HTTPException:
+        db.rollback()
+        raise
+    except BusinessException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"開單失敗: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail=f"開單失敗: {str(e)}"
+        )
 
 
 # ====================================================
 # 2. 确认出售 API (请求体 & 路由接口)
 # ====================================================
 
-class SellDeviceConfirmPayload(BaseModel):
-    model: str = Field(..., description="设备型号或关键词，如：iPhone 13 128G 或 设备ID")
-    price: float = Field(..., description="实际出售价格/成交价")
-    payment_method: Optional[str] = Field(default="微信", description="收款方式")
-    notes: Optional[str] = Field(default="二手销售", description="备注信息")
+
 
 import re
 

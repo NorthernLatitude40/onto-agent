@@ -66,6 +66,11 @@ TRANSLATIONS.update({
         "en-US": "该手机号已被使用",
         "ja-JP": "该手机号已被使用"
     },
+    "DEVICE_NOT_FOUND_OR_SOLD": {
+        "zh-CN": "設備不存在或者已售",
+        "en-US": "設備不存在或者已售",
+        "ja-JP": "設備不存在或者已售"
+    },
     
 })
 
