@@ -14,6 +14,8 @@ class Partner(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     name = Column(String(50), nullable=False, comment="姓名/单位名称")
     phone = Column(String(20), default=None, nullable=True, comment="联系电话")
+    # 💡 新增 shop_id 租戶隔離欄位
+    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False, index=True, comment="門市ID")
     type = Column(SmallInteger, nullable=False, default=1, comment="类型：1-客户 2-供应商 3-二者皆是")
     receivable_amount = Column(Numeric(10, 2), nullable=False, default=0.00, comment="当前应收款金额(元)")
     payable_amount = Column(Numeric(10, 2), nullable=False, default=0.00, comment="当前应付款金额(元)")
@@ -26,6 +28,9 @@ class Partner(Base):
         onupdate=func.now(), 
         comment="更新时间"
     )
+    
+    # 關聯
+    shop = relationship("ShopModel", back_populates="partners")
 
     # 索引定义 (匹配你 DDL 中的 CREATE INDEX)
     __table_args__ = (
