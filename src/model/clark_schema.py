@@ -41,7 +41,7 @@ class SetDefaultIdentitySchema(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "default_shop_id": 1,
                 "default_staff_id": 26

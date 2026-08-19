@@ -106,6 +106,12 @@ class CreateOutboundOrderPayload(BaseModel):
     remark: Optional[str] = Field(None, description="備註資訊")
     auto_deliver: Optional[bool] = True  # 👈 補上此欄位（預設為 True 或 False）
 
+class SellDeviceConfirmPayload(BaseModel):
+    model: str = Field(..., description="设备型号或关键词，如：iPhone 13 128G 或 设备ID")
+    price: float = Field(..., description="实际出售价格/成交价")
+    payment_method: Optional[str] = Field(default="微信", description="收款方式")
+    notes: Optional[str] = Field(default="二手销售", description="备注信息")
+
 class DeviceItem(BaseModel):
     model_name: str
     imei: str
