@@ -34,4 +34,10 @@ class StockStatusEnum(IntEnum):
     REPAIRING = 4  # 維修 / 複測中
     SCRAPPED = 5   # 已報廢
     CANCELLED = 6  # 已取消
+
+class PaymentStatusEnum(IntEnum):
+    RETURNED = 0   # 已退款
+    PAYING = 1    # 待支付
+    PAYED = 2   # 支付完成
+    CANCELLED = 3       # 已取消
     

@@ -42,7 +42,7 @@ from src.model.dashboard_schema import DashboardOverviewResponse
 from src.common.i18n import ErrorCode, get_i18n_message
 from src.common.redis_client import redis_client
 from src.model.inventory_schema import StockListResponse, SellDeviceResponse
-from src.common.dict import StockStatusEnum
+from src.common.dict import StockStatusEnum, PaymentStatusEnum
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ def get_dashboard_overview(
         func.count(OutboundOrder.id)
     ).filter(
         OutboundOrder.shop_id == target_shop_id,
-        OutboundOrder.payment_status == 1,
+        OutboundOrder.payment_status == PaymentStatusEnum.PAYED.value,
         OutboundOrder.created_at >= start_time,
         OutboundOrder.created_at <= end_time
     ).scalar() or 0
