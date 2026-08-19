@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Optional
@@ -14,6 +14,7 @@ router = APIRouter()
 @router.get("/search", summary="根據電話號碼查詢往來單位")
 async def search_partner_by_phone(
     phone: str = Query(..., description="手機號碼"),
+    shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
     db: AsyncSession = Depends(get_db_async)
 ):
     """
@@ -24,7 +25,7 @@ async def search_partner_by_phone(
         return {"code": 200, "data": None}
 
     # 執行查詢
-    stmt = select(Partner).where(Partner.phone == phone)
+    stmt = select(Partner).where(Partner.phone == phone, Partner.shop_id == int(shop_id))
     result = await db.execute(stmt)
     partner = result.scalars().first()
 
@@ -44,6 +45,7 @@ async def search_partner_by_phone(
 @router.post("", summary="新增/保存往來單位", response_model=ApiResponse)
 async def create_partner(
     partner_in: PartnerCreate,
+    shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -51,7 +53,7 @@ async def create_partner(
     """
     # 檢查電話是否已存在
     if partner_in.phone:
-        stmt = select(Partner).where(Partner.phone == partner_in.phone)
+        stmt = select(Partner).where(Partner.phone == partner_in.phone, Partner.shop_id == int(shop_id))
         result = await db.execute(stmt)
         existing_partner = result.scalars().first()
 
@@ -76,7 +78,8 @@ async def create_partner(
         type=partner_in.type,
         remark=partner_in.remark,
         receivable_amount=0.00,
-        payable_amount=0.00
+        payable_amount=0.00,
+        shop_id=shop_id
     )
     
     db.add(new_partner)
@@ -93,9 +96,10 @@ async def create_partner(
 @router.get("/{partner_id}", summary="獲取往來單位詳情")
 async def get_partner_detail(
     partner_id: int,
+    shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(Partner).where(Partner.id == partner_id)
+    stmt = select(Partner).where(Partner.id == partner_id, Partner.shop_id == int(shop_id))
     result = await db.execute(stmt)
     partner = result.scalars().first()
 

@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer
 from decimal import Decimal
 from enum import Enum, IntEnum
+from datetime import datetime, timezone
 
 from src.common.database import get_db
 from src.api.auth_api import get_current_user    # 获取当前登录用户/店铺权限
@@ -18,9 +19,40 @@ class StockItemOut(BaseModel):
     purchase_price: Optional[float] = 0.0
     cost: Optional[float] = 0.0
     status: int
-    sn_code: Optional[str] = None  # 设备序列号/IMEI（如有）
+    sn_code: Optional[str] = None  # 設備序列號/IMEI（如有）
+
+    # 🌟 隱藏欄位：從 ORM 讀取入庫時間（不會出現在 JSON 響應中）
+    in_stock_time: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    # 🌟 序列化器：自動將 datetime 轉為 "YYYY-MM-DD HH:mm:ss" 格式
+    @field_serializer('in_stock_time')
+    def serialize_in_stock_time(self, dt: Optional[datetime], _info) -> Optional[str]:
+        if dt is None:
+            return None
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    # 🌟 計算屬性：自動計算庫齡（天數）並加入返回 JSON 中
+    @computed_field
+    @property
+    def stock_age(self) -> int:
+        """
+        根據 in_stock_time 計算庫齡（天數）。
+        若無入庫時間，預設返回 0 天。
+        """
+        if not self.in_stock_time:
+            return 0
+
+        # 處理時區相容性（帶時區與不帶時區的轉換）
+        now = datetime.now(timezone.utc)
+        
+        # 若資料庫的 datetime 沒有時區資訊，則統一取無時區的 UTC 時間計算
+        if self.in_stock_time.tzinfo is None:
+            now = datetime.utcnow()
+
+        delta = now - self.in_stock_time
+        return max(0, delta.days)  # 確保不為負數
 
 class StockListResponse(BaseModel):
     items: List[StockItemOut]

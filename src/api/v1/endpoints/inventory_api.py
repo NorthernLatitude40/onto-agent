@@ -11,7 +11,7 @@ import httpx
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, or_, desc, select, update
+from sqlalchemy import func, case, or_, select, update, desc, asc
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
 from datetime import datetime, date, time as dt_time, timedelta
 from decimal import Decimal
@@ -99,7 +99,7 @@ async def confirm_add_device(
 
         # 如果前端沒有傳 partner_id，且有提供手機號碼，進行查重或自動新建
         if not partner_id and phone:
-            existing_partner = db.query(Partner).filter(Partner.phone == phone).first()
+            existing_partner = db.query(Partner).filter(Partner.phone == phone,  Partner.shop_id == int(x_shop_id)).first()
             if existing_partner:
                 partner_id = existing_partner.id
             else:
@@ -108,6 +108,7 @@ async def confirm_add_device(
                 new_partner = Partner(
                     name=default_name,
                     phone=phone,
+                    shop_id=x_shop_id,
                     type=2,  # 預設 2-供應商 (或依業務需求設為 3-二者皆是)
                     receivable_amount=0.00,
                     payable_amount=0.00,
@@ -480,9 +481,11 @@ async def confirm_sell_device(
 # 注意：把参数 query 中的 status 改名为 stock_status，避免与 fastapi.status 模块重名冲突！
 @router.get("/list", response_model=StockListResponse, summary="獲取當前門店的設備庫存列表")
 def get_inventory_list(
-    stock_status: Optional[int] = Query(None, alias="status", description="庫存狀態: 1-在庫, 2-已售, 3-退貨等"),
+    stock_status: Optional[int] = Query(None, description="庫存狀態: 1-在庫, 2-已售, 3-退貨等"),
     category: Optional[int] = Query(None, description="分類篩選: 1-新機, 2-二手機"),
     keyword: Optional[str] = Query(None, description="模糊搜尋：機型名稱或串號/SN/IMEI"),
+    sort_by: Optional[str] = Query(None, description="排序欄位，例如: 'stock_age' 或 'created_at'"),
+    sort_order: Optional[str] = Query("desc", description="排序順序: 'asc' 或 'desc'"),
     page: int = Query(1, ge=1, description="頁碼"),
     page_size: int = Query(20, ge=1, le=100, description="每頁筆數"),
     db: Session = Depends(get_db),
@@ -490,7 +493,7 @@ def get_inventory_list(
     current_staff: StaffModel = Depends(allow_shop_staff) 
 ):
     """
-    獲取當前門店下的設備庫存列表（支持分頁、狀態、分類與關鍵字檢索）
+    獲取當前門店下的設備庫存列表（支持分頁、狀態、分類、關鍵字檢索與動態排序）
     """
     # 1. 直接從 current_staff 中安全獲取當前請求的 shop_id
     shop_id = current_staff.shop_id
@@ -519,15 +522,32 @@ def get_inventory_list(
     # 6. 計算符合條件的總筆數
     total = query.count()
 
-    # 7. 排序與分頁切片
+    # 7. 🌟 動態排序邏輯 (Dynamic Sorting)
+    order_direction = sort_order.lower() if sort_order else "desc"
+
+    if sort_by == "stock_age":
+        # 💡 庫齡邏輯：庫齡 = 當前時間 - 入庫時間(in_stock_time)
+        # 庫齡越長 (desc) -> 入庫時間越早 (asc)
+        # 庫齡越短 (asc)  -> 入庫時間越晚 (desc)
+        if order_direction == "asc":
+            query = query.order_by(desc(InventoryModel.in_stock_time))
+        else:
+            query = query.order_by(asc(InventoryModel.in_stock_time))
+    else:
+        # 預設按創建時間排序
+        if order_direction == "asc":
+            query = query.order_by(asc(InventoryModel.created_at))
+        else:
+            query = query.order_by(desc(InventoryModel.created_at))
+
+    # 8. 分頁切片
     items = (
-        query.order_by(desc(InventoryModel.created_at))
-        .offset((page - 1) * page_size)
+        query.offset((page - 1) * page_size)
         .limit(page_size)
         .all()
     )
 
-    # 8. 遵循 Bare Payload 規範或 StockListResponse 結構返回
+    # 9. 遵循 Bare Payload 規範或 StockListResponse 結構返回
     return {
         "total": total,
         "page": page,

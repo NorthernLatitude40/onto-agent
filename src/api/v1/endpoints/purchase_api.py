@@ -98,7 +98,6 @@ def get_order_list(
                 "id": order.id,
                 "order_sn": order.order_sn,
                 "order_type": 2,  # 2: 銷售
-                "category": inv.category,
                 "type_name": "銷售出庫",
                 "partner_name": customer.name if customer else "散客/零售客戶",
                 "partner_phone": customer.phone if customer else "-",

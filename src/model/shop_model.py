@@ -22,5 +22,6 @@ class ShopModel(Base):
     # 1个店铺对应多个 staff 记录
     staffs = relationship("StaffModel", back_populates="shop", cascade="all, delete-orphan")
 
-        # 1个店铺对应多个 staff 记录
     inventories = relationship("InventoryModel", back_populates="shop", cascade="all, delete-orphan")
+
+    partners = relationship("Partner", back_populates="shop", cascade="all, delete-orphan")
