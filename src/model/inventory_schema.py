@@ -74,6 +74,7 @@ class PurchaseOrderItemPayload(BaseModel):
     model_name: str = Field(..., description="設備機型名稱，如：iPhone 15 Pro")
     serials: List[str] = Field(default_factory=list, description="串號/IMEI/SN列表")
     cost_price: float = Field(0.0, description="進貨/回收單價")
+    notes: str = Field(None, description="備注")
 
 
 # 2. 待入庫單據主 Payload 模型 (對應前端 payload)

@@ -34,6 +34,15 @@ logger = logging.getLogger(__name__)
 # ==========================================
 
 class AddDeviceInput(BaseModel):
+    supplier_phone: str = Field(
+        description="客戶聯係方式"
+    )
+    supplier_name: str = Field(
+        description="客戶名稱"
+    )
+    product_type: int = Field(
+        description="1-新機，2-二手手機"
+    )
     model: str = Field(
         description="手机型号及版本容量，例如：iPhone 13 128G、华为 Mate 60 Pro 256G"
     )
@@ -72,12 +81,22 @@ class SellDeviceInput(BaseModel):
 
 # 1. 设备收机/入库解析 Tool
 @tool("add_device", args_schema=AddDeviceInput)
-def add_device(model: str, cost_price: float, color: str = "未知", notes: str = "二手回收") -> dict:
+def add_device(model: str, 
+               cost_price: float, 
+               color: str = "未知", 
+               notes: str = "二手回收", 
+               product_type: int = 2,
+               supplier_phone: str = "",
+               supplier_name: str = ""
+               ) -> dict:
     """
     用于识别用户收机/进货/入库设备的意图并提取参数。
     当用户说“收了/买入/进货/录入某台手机”时，必须调用此工具提取参数。
     """
     return {
+        "supplier_phone": supplier_phone,
+        "supplier_name": supplier_name,
+        "product_type": product_type,
         "status": "parsed",
         "action": "in",
         "type": "in",

@@ -370,15 +370,12 @@ async def confirm_sell_device(
         # 3. 🛡️ 悲观排他锁 (SELECT ... FOR UPDATE) 防并发超卖
         # ---------------------------------------------------------
         query = db.query(InventoryModel).filter(
-            InventoryModel.status == 1,
+            InventoryModel.status == StockStatusEnum.IN_STOCK.value,
             InventoryModel.shop_id == x_shop_id,
             InventoryModel.stock_quantity > 0,
         )
 
-        if real_model.isdigit():
-            query = query.filter(InventoryModel.id == int(real_model))
-        else:
-            query = query.filter(InventoryModel.title.ilike(f"%{real_model}%"))
+        query = query.filter(InventoryModel.title.ilike(f"%{real_model}%"))  
 
         # 锁定选中行记录
         device = query.with_for_update().first()
@@ -402,7 +399,7 @@ async def confirm_sell_device(
         device.stock_quantity -= 1
         if device.stock_quantity <= 0:
             device.stock_quantity = 0
-            device.status = 2  # 已出库
+            device.status = StockStatusEnum.SOLD.value  # 已出库
 
         # ---------------------------------------------------------
         # 5. 写入出库单、明细及财务流水

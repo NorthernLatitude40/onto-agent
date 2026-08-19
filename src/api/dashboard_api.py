@@ -42,7 +42,7 @@ from src.model.dashboard_schema import DashboardOverviewResponse
 from src.common.i18n import ErrorCode, get_i18n_message
 from src.common.redis_client import redis_client
 from src.model.inventory_schema import StockListResponse, SellDeviceResponse
-
+from src.common.dict import StockStatusEnum
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,7 @@ def get_dashboard_overview(
         func.coalesce(func.sum(Inventory.stock_quantity), 0)
     ).filter(
         Inventory.shop_id == target_shop_id,
-        Inventory.status == 1
+        Inventory.status == StockStatusEnum.IN_STOCK.value
     ).scalar()
 
     # 3. 总体统计指标 (当前 range_type 汇总)
