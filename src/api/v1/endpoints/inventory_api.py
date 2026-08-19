@@ -49,6 +49,8 @@ from src.common.redis_client import redis_client
 from src.model.inventory_schema import StockListResponse, SellDeviceResponse, AddDeviceConfirmPayload, CreatePurchaseOrderPayload, ReturnSalesRequest
 from src.api.auth_api import get_current_staff   # 直連 staff 的驗證依賴
 from src.common.generate_sn import generate_sn
+from src.common.dict import InventoryStatusEnum
+from src.model.inventory_schema import UpdateStatusRequest
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +212,7 @@ def create_outbound_order(
         raise HTTPException(status_code=400, detail="部分設備不存在或不屬於當前門店")
 
     for inv in inventories:
-        if inv.status != 2:  # 1: 在庫
+        if inv.status != InventoryStatusEnum.IN_STOCK:  # 1: 在庫
             raise HTTPException(status_code=400, detail=f"設備 (SN: {inv.sn_code}) 非在庫狀態")
 
     try:
@@ -549,7 +551,8 @@ def search_inventory_by_sn(
     # 1. 在庫存表/設備表中查詢對應的 SN/IMEI
     inventory = db.query(InventoryModel).filter(
         InventoryModel.shop_id == current_user.shop_id,
-        InventoryModel.sn_code == clean_sn
+        InventoryModel.sn_code == clean_sn,
+        InventoryModel.status == 1
     ).first()
 
     if not inventory:
@@ -647,6 +650,98 @@ async def get_sales_detail(
         }
     }
 
+@router.get("/inventory/detail/{target_id}")
+async def get_inventory_detail(
+    target_id: str,
+    x_shop_id: Optional[str] = Header(None, alias="X-Shop-Id"),
+    db: AsyncSession = Depends(get_db_async)
+):
+    """獲取設備詳情 (支援用數字 ID 或序列號/IMEI 查詢)"""
+    
+    stmt = select(InventoryModel)
+    
+    # 支持主鍵 ID 或 SN 號查詢
+    if target_id.isdigit():
+        stmt = stmt.where(or_(InventoryModel.id == int(target_id), InventoryModel.sn_code == target_id))
+    else:
+        stmt = stmt.where(InventoryModel.sn_code == target_id)
+
+    if x_shop_id:
+        stmt = stmt.where(InventoryModel.shop_id == int(x_shop_id))
+
+    result = await db.execute(stmt)
+    device = result.scalars().first()
+
+    if not device:
+        raise HTTPException(status_code=404, detail="未找到該設備資料")
+
+    # 查詢供應商資訊 (若有關聯 supplier_id)
+    supplier_name, supplier_phone = "未知供應商", "-"
+    if device.supplier_id:
+        p_stmt = select(Partner).where(Partner.id == device.supplier_id)
+        p_res = await db.execute(p_stmt)
+        supplier = p_res.scalars().first()
+        if supplier:
+            supplier_name = supplier.name or supplier_name
+            supplier_phone = supplier.phone or supplier_phone
+
+    return {
+        "code": 200,
+        "msg": "success",
+        "data": {
+            "id": device.id,
+            "sn_code": device.sn_code,
+            "title": device.title,
+            "spec": device.spec,
+            "category": device.category,
+            "purchase_price": float(device.purchase_price or 0.0),
+            "selling_price": float(device.selling_price or 0.0),
+            "stock_quantity": device.stock_quantity,
+            "status": int(device.status),  # 回傳數字 1, 2, 3, 4
+            "supplier_name": supplier_name,
+            "supplier_phone": supplier_phone,
+            "in_stock_time": device.in_stock_time.strftime("%Y-%m-%d %H:%M:%S") if device.in_stock_time else "",
+            "remark": device.remark
+        }
+    }
+
+@router.post("/status")
+async def update_inventory_status(
+    req: UpdateStatusRequest,
+    x_shop_id: Optional[str] = Header(None, alias="X-Shop-Id"),
+    db: AsyncSession = Depends(get_db_async)
+):
+    """修改設備狀態 (如標記維修 status=3、標記報廢 status=4)"""
+    
+    stmt = select(InventoryModel).where(InventoryModel.id == req.id)
+    if x_shop_id:
+        stmt = stmt.where(InventoryModel.shop_id == int(x_shop_id))
+
+    result = await db.execute(stmt)
+    device = result.scalars().first()
+
+    if not device:
+        return {"code": 404, "msg": "設備不存在"}
+
+    try:
+        # 更新狀態 (直接給予 int/IntEnum 值)
+        device.status = req.status.value
+        device.updated_at = datetime.now()
+
+        await db.commit()
+
+        return {
+            "code": 200,
+            "msg": "狀態更新成功",
+            "data": {
+                "id": device.id,
+                "status": device.status
+            }
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失敗: {str(e)}")
+
 @router.post("/return")
 async def process_sales_return(
     req: ReturnSalesRequest,
@@ -687,7 +782,7 @@ async def process_sales_return(
             .where(InventoryModel.id.in_(inventory_ids))
             .values(
                 status=1,  # 1: 在庫
-                stock_quantity=InventoryModel.stock_quantity + 1,
+                # stock_quantity=InventoryModel.stock_quantity + 1,
                 updated_at=datetime.now()
             )
         )
@@ -698,8 +793,8 @@ async def process_sales_return(
         if hasattr(order, 'total_amount') and order.total_amount:
             refund_amount = float(order.total_amount)
 
-        # 5. 更新銷售主單狀態為 2 (已退貨)
-        order.status = 2  # 2: 已退貨
+        # 5. 更新銷售主單狀態為 0 (已退貨)
+        order.payment_status = 0  # 0: 已退貨
         order.updated_at = datetime.now()
 
         # 6. 生成退款財務支出記錄
@@ -722,7 +817,7 @@ async def process_sales_return(
             "msg": "退貨辦理成功",
             "data": {
                 "id": order.id, 
-                "status": order.status,
+                "status": order.payment_status,
                 "refund_amount": refund_amount,
                 "returned_items_count": len(inventory_ids)
             }

@@ -11,6 +11,7 @@ from src.model.staff_model import StaffModel          # 員工表
 from src.api.auth_api import get_current_staff   # 直連 staff 的驗證依賴
 from src.model.order_model import OutboundOrderModel
 from src.model.purchase_schema import DeviceItem, PurchaseDetailResponse, ConfirmInboundRequest
+from src.common.dict import InboundStatusEnum
 
 
 router = APIRouter()
@@ -19,7 +20,10 @@ router = APIRouter()
 @router.get("/list", summary="獲取進銷存單據列表 (進貨/銷售二合一)")
 def get_order_list(
     order_type: Optional[int] = Query(None, description="單據類型: 1-進貨/入庫, 2-銷售/出庫 (不傳則查詢全部)"),
-    status: Optional[int] = Query(None, description="1-未完成入庫，2-已完成入庫"),
+    status: Optional[InboundStatusEnum] = Query(
+        None, 
+        description="1-未完成入庫, 2-已完成入庫, 3-已取消, 0-已退貨"
+    ),
     keyword: Optional[str] = Query(None, description="關鍵字: 單號/IMEI/合作方名稱/電話"),
     page: int = Query(1, ge=1, description="頁碼"),
     page_size: int = Query(20, ge=1, le=100, description="每頁筆數"),
@@ -40,7 +44,7 @@ def get_order_list(
             db.query(InventoryModel, PartnerModel)
             .outerjoin(PartnerModel, InventoryModel.supplier_id == PartnerModel.id)
             .filter(InventoryModel.shop_id == shop_id,
-                    InventoryModel.status == status
+                    InventoryModel.status == status.value
                     )
         )
         if kw:
@@ -75,6 +79,12 @@ def get_order_list(
             .outerjoin(PartnerModel, OutboundOrderModel.customer_id == PartnerModel.id)
             .filter(OutboundOrderModel.shop_id == shop_id)
         )
+        # 2. 如果 status 有傳值（非 None），才加上狀態過濾條件
+        if status is not None:
+            # 若 status 是 Enum 類型，可以使用 status.value 或直接傳入
+            status_val = status.value if hasattr(status, 'value') else status
+            s_query = s_query.filter(OutboundOrderModel.payment_status == status_val)
+
         if kw:
             s_query = s_query.filter(
                 or_(
@@ -88,6 +98,7 @@ def get_order_list(
                 "id": order.id,
                 "order_sn": order.order_sn,
                 "order_type": 2,  # 2: 銷售
+                "category": inv.category,
                 "type_name": "銷售出庫",
                 "partner_name": customer.name if customer else "散客/零售客戶",
                 "partner_phone": customer.phone if customer else "-",

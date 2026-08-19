@@ -1,6 +1,7 @@
-from sqlalchemy import Column, BigInteger, String, Numeric, Integer, DateTime, ForeignKey, func
+from sqlalchemy import Column, BigInteger, String, Numeric, Integer, DateTime, ForeignKey, func, Enum as SQLEnum, SmallInteger
 from sqlalchemy.orm import relationship
 from src.common.database import Base
+from src.common.dict import InventoryStatusEnum
 
 class InventoryModel(Base):
     __tablename__ = "inventory"
@@ -14,7 +15,11 @@ class InventoryModel(Base):
     remark = Column(String(255), nullable=True)
     category = Column(BigInteger, default=2)
     stock_quantity = Column(Integer, nullable=False, default=1)
-    status = Column(BigInteger, default=1)
+    status = Column(
+        SmallInteger,
+        default=InventoryStatusEnum.IN_STOCK.value,
+        comment="設備狀態: 1-在庫, 2-已售出, 3-鎖定, 4-退貨, 5-報廢"
+    )
     created_by = Column(BigInteger, nullable=True)
     supplier_id = Column(BigInteger, nullable=True)
     
