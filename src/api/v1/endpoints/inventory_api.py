@@ -49,8 +49,8 @@ from src.common.redis_client import redis_client
 from src.model.inventory_schema import StockListResponse, SellDeviceResponse, AddDeviceConfirmPayload, CreatePurchaseOrderPayload, ReturnSalesRequest
 from src.api.auth_api import get_current_staff   # 直連 staff 的驗證依賴
 from src.common.generate_sn import generate_sn
-from src.common.dict import InventoryStatusEnum
 from src.model.inventory_schema import UpdateStatusRequest
+from src.common.dict import StockStatusEnum
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +213,7 @@ def create_outbound_order(
         raise HTTPException(status_code=400, detail="部分設備不存在或不屬於當前門店")
 
     for inv in inventories:
-        if inv.status != InventoryStatusEnum.IN_STOCK:  # 1: 在庫
+        if inv.status != StockStatusEnum.IN_STOCK: 
             raise HTTPException(status_code=400, detail=f"設備 (SN: {inv.sn_code}) 非在庫狀態")
 
     try:
@@ -572,7 +572,7 @@ def search_inventory_by_sn(
     inventory = db.query(InventoryModel).filter(
         InventoryModel.shop_id == current_user.shop_id,
         InventoryModel.sn_code == clean_sn,
-        InventoryModel.status == 1
+        InventoryModel.status == StockStatusEnum.IN_STOCK.value
     ).first()
 
     if not inventory:

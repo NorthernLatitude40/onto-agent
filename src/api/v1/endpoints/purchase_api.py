@@ -11,7 +11,7 @@ from src.model.staff_model import StaffModel          # 員工表
 from src.api.auth_api import get_current_staff   # 直連 staff 的驗證依賴
 from src.model.order_model import OutboundOrderModel
 from src.model.purchase_schema import DeviceItem, PurchaseDetailResponse, ConfirmInboundRequest
-from src.common.dict import InboundStatusEnum
+from src.common.dict import StockStatusEnum
 
 
 router = APIRouter()
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("/list", summary="獲取進銷存單據列表 (進貨/銷售二合一)")
 def get_order_list(
     order_type: Optional[int] = Query(None, description="單據類型: 1-進貨/入庫, 2-銷售/出庫 (不傳則查詢全部)"),
-    status: Optional[InboundStatusEnum] = Query(
+    status: Optional[StockStatusEnum] = Query(
         None, 
         description="1-未完成入庫, 2-已完成入庫, 3-已取消, 0-已退貨"
     ),

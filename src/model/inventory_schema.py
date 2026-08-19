@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from src.common.database import get_db
 from src.api.auth_api import get_current_user    # 获取当前登录用户/店铺权限
 from src.common.dict import DeviceTypeEnum
+from src.common.dict import StockStatusEnum
 
 class StockItemOut(BaseModel):
     id: int
@@ -122,12 +123,6 @@ class SalesDetailResponse(BaseModel):
 class ReturnSalesRequest(BaseModel):
     id: int
 
-class InventoryStatusEnum(IntEnum):
-    IN_STOCK = 1     # 在庫 / 待售
-    SOLD = 2         # 已售出
-    REPAIR = 3       # 維修中
-    SCRAP = 4        # 已報廢
-
 class UpdateStatusRequest(BaseModel):
     id: int
-    status: InventoryStatusEnum  # FastAPI 自動驗證傳入的值是否符合 1, 2, 3, 4
+    status: StockStatusEnum  # FastAPI 自動驗證傳入的值是否符合 1, 2, 3, 4
