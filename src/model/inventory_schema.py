@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from decimal import Decimal
+from enum import Enum, IntEnum
 
 from src.common.database import get_db
 from src.api.auth_api import get_current_user    # 获取当前登录用户/店铺权限
@@ -12,11 +13,12 @@ class StockItemOut(BaseModel):
     id: int
     title: Optional[str] = None
     model: Optional[str] = None
+    category: Optional[int] = None
     spec: Optional[str] = None
     purchase_price: Optional[float] = 0.0
     cost: Optional[float] = 0.0
     status: int
-    sn: Optional[str] = None  # 设备序列号/IMEI（如有）
+    sn_code: Optional[str] = None  # 设备序列号/IMEI（如有）
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -87,3 +89,13 @@ class SalesDetailResponse(BaseModel):
 
 class ReturnSalesRequest(BaseModel):
     id: int
+
+class InventoryStatusEnum(IntEnum):
+    IN_STOCK = 1     # 在庫 / 待售
+    SOLD = 2         # 已售出
+    REPAIR = 3       # 維修中
+    SCRAP = 4        # 已報廢
+
+class UpdateStatusRequest(BaseModel):
+    id: int
+    status: InventoryStatusEnum  # FastAPI 自動驗證傳入的值是否符合 1, 2, 3, 4
