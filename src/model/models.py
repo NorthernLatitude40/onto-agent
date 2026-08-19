@@ -30,6 +30,8 @@ class FinancialRecord(Base):
         comment="所属店铺ID"
     )
     device_sn_code = Column(String(64), nullable=False, unique=True)
+    # 修正點：綁定特定一次生命週期的 inventory.id
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=True)
 
 
 
