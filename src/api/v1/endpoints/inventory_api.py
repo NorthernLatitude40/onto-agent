@@ -849,7 +849,7 @@ async def process_sales_return(
             update(InventoryModel)
             .where(InventoryModel.id.in_(inventory_ids))
             .values(
-                status=1,  # 1: 在庫
+                status=StockStatusEnum.RETURNED.value, 
                 # stock_quantity=InventoryModel.stock_quantity + 1,
                 updated_at=datetime.now()
             )
