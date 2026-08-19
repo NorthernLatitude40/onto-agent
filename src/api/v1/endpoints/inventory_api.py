@@ -810,86 +810,100 @@ async def update_inventory_status(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"更新失敗: {str(e)}")
 
-@router.post("/return")
-async def process_sales_return(
+@router.post("/refund", summary="辦理銷售退貨")
+def refund_outbound_order(
     req: ReturnSalesRequest,
-    x_shop_id: Optional[str] = Header(None, alias="X-Shop-Id"),
-    db: AsyncSession = Depends(get_db_async)
+    db: Session = Depends(get_db),
+    current_staff: StaffModel = Depends(get_current_staff)
 ):
-    """辦理退貨：更新銷售單狀態、查出明細還原庫存、記錄財務退款支出"""
-    
-    # 1. 查詢銷售主單 (OutboundOrderModel)
-    stmt = select(OutboundOrderModel).where(OutboundOrderModel.id == req.id)
-    if x_shop_id:
-        stmt = stmt.where(OutboundOrderModel.shop_id == int(x_shop_id))
-    
-    result = await db.execute(stmt)
-    order = result.scalars().first()
-
-    if not order:
-        return {"code": 404, "msg": "銷售單據不存在"}
-
-    if order.payment_status == 0:
-        return {"code": 400, "msg": "該單據已完成退貨，請勿重複操作"}
-
-    # 2. 查詢該銷售單下的所有明細項 (OutboundOrderItem)
-    items_stmt = select(OutboundOrderItem).where(OutboundOrderItem.outbound_order_id == order.id)
-    items_res = await db.execute(items_stmt)
-    order_items = items_res.scalars().all()
-
-    if not order_items:
-        return {"code": 400, "msg": "該銷售單下無任何商品明細，無法退貨"}
+    shop_id = current_staff.shop_id
 
     try:
-        # 3. 收集所有關聯的 inventory_id，並批量還原庫存狀態
-        inventory_ids = [item.inventory_id for item in order_items]
-        
-        # 批量更新 InventoryModel：將狀態改為 1 (在售/在庫)，並還原庫存數量
-        inv_update_stmt = (
-            update(InventoryModel)
-            .where(InventoryModel.id.in_(inventory_ids))
-            .values(
-                status=StockStatusEnum.RETURNED.value, 
-                # stock_quantity=InventoryModel.stock_quantity + 1,
-                updated_at=datetime.now()
+        # 1. 查詢原銷售單據與關聯庫存（加行鎖）
+        order = (
+            db.query(OutboundOrderModel)
+            .filter(
+                OutboundOrderModel.id == req.id,
+                OutboundOrderModel.shop_id == shop_id
             )
+            .with_for_update()
+            .first()
         )
-        await db.execute(inv_update_stmt)
 
-        # 4. 計算總退款金額 (或直接使用 order.total_amount)
-        refund_amount = sum(float(item.selling_price or 0.0) for item in order_items)
-        if hasattr(order, 'total_amount') and order.total_amount:
-            refund_amount = float(order.total_amount)
+        if not order:
+            raise HTTPException(status_code=404, detail="找不到該銷售單據")
 
-        # 5. 更新銷售主單狀態為 0 (已退貨)
-        order.payment_status = 0  # 0: 已退貨
-        order.updated_at = datetime.now()
+        if order.payment_status == 0:  # 0: 已退款
+            raise HTTPException(status_code=400, detail="該單據已辦理過退貨，請勿重複操作")
 
-        # 6. 生成退款財務支出記錄
-        refund_record = FinancialRecord(
-            shop_id=order.shop_id,
-            type=2,
-            record_sn=generate_sn("SN"),
+        items = db.query(OutboundOrderItem).filter(OutboundOrderItem.outbound_order_id == order.id).all()
+        inventory_ids = [item.inventory_id for item in items]
+
+        inventories = (
+            db.query(InventoryModel)
+            .filter(InventoryModel.id.in_(inventory_ids))
+            .with_for_update()
+            .all()
+        )
+
+        refund_amount = order.total_amount
+        total_cost = Decimal("0.00")
+
+        # 2. 處理設備：原設備變更為已退貨，並創建全新的待入庫紀錄
+        for old_inv in inventories:
+            total_cost += Decimal(str(old_inv.purchase_price or 0))
+            
+            # (1) 原設備標記為已退貨 (RETURNED = 7 或你的已退貨 Enum 值)
+            old_inv.status = StockStatusEnum.RETURNED.value
+
+            # (2) 重新複製建立一筆全新的設備紀錄，狀態為待入庫 (PENDING_IN = 1)
+            new_inv = InventoryModel(
+                shop_id=old_inv.shop_id,
+                title=old_inv.title,
+                sn_code=old_inv.sn_code,
+                supplier_id=old_inv.supplier_id,
+                purchase_price=old_inv.purchase_price,
+                stock_quantity=1,
+                status=StockStatusEnum.PENDING.value,  # 新記錄設為待入庫/待檢驗
+                remark=f"來自銷售退貨 (原單號: {order.order_sn}, 原設備ID: {old_inv.id})"
+            )
+            db.add(new_inv)
+
+        # 計算原單對應毛利
+        refund_profit = refund_amount - total_cost
+
+        # 3. 更新銷售單據狀態為 已退款 (0)
+        order.payment_status = 0
+
+        # 4. 生成負數收入與毛利（紅字衝減）
+        fin_sn = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-{current_staff.id}"
+        financial_record = FinancialRecord(
+            shop_id=shop_id,
+            type=1,                      # 1: 收入類別 (紅字衝減)
+            record_sn=fin_sn,
+            inventory_id=old_inv.id,
+            amount=-refund_amount,       # 負數金額 -> 衝減銷售收入
+            profit=-refund_profit,       # 負數毛利 -> 衝減銷售毛利
             category="sales_refund",
-            amount=refund_amount,
-            remark=f"銷售單 SO-{order.id} 退貨退款",
-            created_at=datetime.now()
+            business_id=order.id,
+            created_by=current_staff.id,
+            remark=f"銷售單退貨衝減: {order.order_sn}"
         )
-        db.add(refund_record)
+        db.add(financial_record)
 
-        # 7. 提交事務
-        await db.commit()
-
+        db.commit()
         return {
-            "code": 200,
-            "msg": "退貨辦理成功",
-            "data": {
-                "id": order.id, 
-                "status": order.payment_status,
-                "refund_amount": refund_amount,
-                "returned_items_count": len(inventory_ids)
-            }
+            "code": 200, 
+            "message": "退貨成功，原設備已標記退貨，並已自動生成待入庫檢驗紀錄",
+            "outbound_no": order.order_sn
         }
+
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"退貨處理失敗: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"退貨失敗: {str(e)}"
+        )
