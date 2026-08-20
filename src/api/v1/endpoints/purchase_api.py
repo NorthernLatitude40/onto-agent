@@ -1,7 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, desc
+from sqlalchemy import or_, desc, func
 from datetime import datetime
 
 from src.common.database import get_db
@@ -10,6 +10,7 @@ from src.model.partner_model import Partner as  PartnerModel     # 供應商/合
 from src.model.staff_model import StaffModel          # 員工表
 from src.api.auth_api import get_current_staff   # 直連 staff 的驗證依賴
 from src.model.order_model import OutboundOrderModel
+from src.model.order_item_model import OutboundOrderItem
 from src.model.purchase_schema import DeviceItem, PurchaseDetailResponse, ConfirmInboundRequest
 from src.common.dict import StockStatusEnum
 
@@ -96,38 +97,51 @@ def get_order_list(
 
     # 2. 查詢銷售/出庫單據 (order_type == 2 或未指定)
     if order_type is None or order_type == 2:
-        s_query = (
-            db.query(OutboundOrderModel, PartnerModel)
-            .outerjoin(PartnerModel, OutboundOrderModel.customer_id == PartnerModel.id)
-            .filter(OutboundOrderModel.shop_id == shop_id)
-        )
-        # 2. 如果 status 有傳值（非 None），才加上狀態過濾條件
-        if status is not None:
-            # 若 status 是 Enum 類型，可以使用 status.value 或直接傳入
-            status_val = status.value if hasattr(status, 'value') else status
-            s_query = s_query.filter(OutboundOrderModel.payment_status == status_val)
-
-        if kw:
-            s_query = s_query.filter(
-                or_(
-                    OutboundOrderModel.order_sn.ilike(kw),
-                    PartnerModel.name.ilike(kw),
-                    PartnerModel.phone.ilike(kw)
+            s_query = (
+                db.query(
+                    OutboundOrderModel,
+                    PartnerModel,
+                    # 使用 coalesce 防止沒有 item 時回傳 None（自動轉為 0）
+                    func.coalesce(func.sum(OutboundOrderItem.quantity), 0).label("total_quantity")
+                    # 如果你只是要計算「有幾種商品/幾行明細」，請用：func.count(OutboundOrderItemModel.id).label("item_count")
                 )
+                .outerjoin(PartnerModel, OutboundOrderModel.customer_id == PartnerModel.id)
+                .outerjoin(OutboundOrderItem, OutboundOrderModel.id == OutboundOrderItem.outbound_order_id)
+                .filter(OutboundOrderModel.shop_id == shop_id)
+                .group_by(OutboundOrderModel.id, PartnerModel.id)
             )
-        for order, customer in s_query.all():
-            all_orders.append({
-                "id": order.id,
-                "order_sn": order.order_sn,
-                "order_type": 2,  # 2: 銷售
-                "type_name": "銷售出庫",
-                "partner_name": customer.name if customer else "散客/零售客戶",
-                "partner_phone": customer.phone if customer else "-",
-                "total_amount": float(order.total_amount or 0.0),
-                "total_profit": float(order.total_profit or 0.0),
-                "status": order.payment_status,
-                "created_at": order.created_at
-            })
+            # 2. 如果 status 有傳值（非 None），才加上狀態過濾條件
+            if status is not None:
+                # 若 status 是 Enum 類型，可以使用 status.value 或直接傳入
+                status_val = status.value if hasattr(status, 'value') else status
+                s_query = s_query.filter(OutboundOrderModel.payment_status == status_val)
+
+            if kw:
+                # 模糊查詢關鍵字自動加上 % 萬用字元
+                kw_pattern = f"%{kw}%"
+                s_query = s_query.filter(
+                    or_(
+                        OutboundOrderModel.order_sn.ilike(kw_pattern),
+                        PartnerModel.name.ilike(kw_pattern),
+                        PartnerModel.phone.ilike(kw_pattern)
+                    )
+                )
+
+            # 巡迴解包：因為 query 包含 total_quantity，此處為 3 個變數 (order, customer, total_quantity)
+            for order, customer, total_quantity in s_query.all():
+                all_orders.append({
+                    "id": order.id,
+                    "order_sn": order.order_sn,
+                    "order_type": 2,  # 2: 銷售
+                    "type_name": "銷售出庫",
+                    "partner_name": customer.name if customer else "散客/零售客戶",
+                    "partner_phone": customer.phone if customer else "-",
+                    "total_amount": float(order.total_amount or 0.0),
+                    "total_profit": float(order.total_profit or 0.0),
+                    "status": order.payment_status,
+                    "order_item_count": int(total_quantity or 0),  # 帶入 SQLAlchemy 計算出的總數量
+                    "created_at": order.created_at
+                })
 
     # 3. 按時間倒序排序 (最新單據排在最前面)
     all_orders.sort(key=lambda x: x["created_at"] if x["created_at"] else "", reverse=True)
