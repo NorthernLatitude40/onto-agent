@@ -29,7 +29,7 @@ class LLMRouter:
         # Gemini
         # ----------------------------
         self.gemini = ChatGoogleGenerativeAI(
-            model="gemini-3.5-flash",
+            model="gemini-2.5-flash",
             api_key=settings.GEMINI_API_KEY,
             temperature=0,
         )
@@ -48,7 +48,7 @@ class LLMRouter:
         # HuggingFace
         # ----------------------------
         hf_endpoint = HuggingFaceEndpoint(
-            repo_id="Qwen/Qwen2.5-7B-Instruct",
+            repo_id="meta-llama/Llama-3.1-8B-Instruct",
             huggingfacehub_api_token=settings.HUGGINGFACEHUB_API_TOKEN,
             temperature=0.1,
             task="text-generation",

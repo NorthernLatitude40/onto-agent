@@ -59,23 +59,46 @@ class AddDeviceInput(BaseModel):
 
 # 1. 重新设计入参 Schema：区分 device_id 与 model
 class SellDeviceInput(BaseModel):
+    # 1. 原有欄位
     device_id: Optional[int] = Field(
         default=None,
-        description="要出售的设备唯一ID（如果是数字ID优先填这里），例如：23",
+        description="要出售的設備唯一ID（如果是數字ID優先填這裡），例如：23",
     )
     model: Optional[str] = Field(
         default=None,
-        description="要出售的手机型号名称（如果已知名称填这里），例如：iPhone 13 128G 或 xiaomi8",
+        description="要出售的手機型號名稱（如果已知名稱填這裡），例如：iPhone 13 128G 或 xiaomi8",
     )
     sell_price: float = Field(
-        description="实际卖出/成交价格（纯数字，单位元），例如：2500"
+        description="實際賣出/成交價格（純數字，單位元），例如：2500"
     )
     payment_method: Optional[str] = Field(
         default="微信",
-        description="客户付款方式，如：微信、支付宝、现金、刷卡",
+        description="客戶付款方式，如：微信、支付寶、現金、刷卡",
     )
     notes: Optional[str] = Field(
-        default="二手销售", description="销售备注或客户信息"
+        default="二手銷售", description="銷售備註或客戶資訊"
+    )
+
+    # 2. 新增補充欄位
+    sn: Optional[str] = Field(
+        default=None,
+        description="產品串號 / IMEI 碼 / 序列號（用於精準定位庫存設備），例如：869123045678901"
+    )
+    customer_name: Optional[str] = Field(
+        default=None,
+        description="客戶姓名/名稱（散客可留空），例如：張三"
+    )
+    customer_phone: Optional[str] = Field(
+        default=None,
+        description="客戶聯繫電話（用於查詢/綁定歷史客戶），例如：13800138000"
+    )
+    spec: Optional[str] = Field(
+        default=None,
+        description="產品規格/顏色/容量（如未在 model 中包含時填寫），例如：暗夜紫 256G"
+    )
+    quantity: int = Field(
+        default=1,
+        description="賣出數量（二手/單一設備預設為 1，配件或新機批量銷售時填寫）"
     )
 
 
@@ -112,81 +135,89 @@ def add_device(model: str,
 @tool("sell_device", args_schema=SellDeviceInput)
 def sell_device(
     sell_price: float,
+    model: str,
     device_id: Optional[int] = None,
-    model: Optional[str] = None,
+    sn: Optional[str] = None,
+    customer_name: Optional[str] = None,
+    customer_phone: Optional[str] = None,
+    spec: Optional[str] = None,
+    quantity: int = 1,
     payment_method: str = "微信",
     notes: str = "二手销售",
     db_session=None,
 ) -> dict:
     """出售/开单/出库某台手机设备。
 
-    当用户表达卖出、售出、开单、出库设备时调用此工具。
+    【强制指示】
+    1. 只要用户提到“出售”、“卖出”、“开单”、“出库”任何设备，必须强制调用此工具！
+    2. device_id 或 sn (串号) 只要有其中一个即可调用，无需强制索取另一个。
     """
     final_device_id = device_id
-    final_model_name = model
+    final_sn = sn.strip() if sn else None
+    final_model_name = model.strip() if model else None
 
-    # 1. 纯数字纠正为 ID
-    if final_model_name and str(final_model_name).isdigit() and not final_device_id:
+    # 1. 純數字型號自動修正為設備 ID
+    if final_model_name and final_model_name.isdigit() and not final_device_id:
         final_device_id = int(final_model_name)
-        final_model_name = None
 
-    # 2. 数据库查询逻辑
+    # 2. 資料庫查詢邏輯 (優先精確比對)
     if db_session:
         query = db_session.query(InventoryModel).filter(InventoryModel.status == 1)
-        
-        # 场景 A: 按 ID 精确查询
+        device = None
+
+        # 分歧 A: 優先使用 device_id 查詢
         if final_device_id:
             device = query.filter(InventoryModel.id == final_device_id).first()
             if not device:
-                # 🛑 异常 1：设备未找到 (404) -> 返回 RFC 7807 结构
                 return ProblemDetails(
                     type="urn:error:device-not-found",
                     title="Device Not Found",
                     status=404,
                     detail=f"在库中未找到 ID 为 {final_device_id} 的设备，可能已出售或未入库。",
                     extensions={"queried_id": final_device_id}
-                ).model_dump(exclude_none=True),  # Pydantic v2 用 model_dump，v1 用 .dict()
-            
-            final_model_name = device.title
-            
-        # 场景 B: 按名称模糊查询 (用户只说了型号没说 ID)
-        elif final_model_name:
-            devices = query.filter(InventoryModel.title.ilike(f"%{final_model_name}%")).all()
-            
-            if not devices:
-                # 🛑 异常 2：设备未找到 (404)
+                ).model_dump(exclude_none=True)
+
+        # 分歧 B: 使用 sn (串號/IMEI) 查詢
+        elif final_sn:
+            device = query.filter(InventoryModel.sn == final_sn).first()
+            if not device:
                 return ProblemDetails(
                     type="urn:error:device-not-found",
                     title="Device Not Found",
                     status=404,
-                    detail=f"未找到型号包含 '{final_model_name}' 的在库设备。",
-                    extensions={"queried_model": final_model_name}
-                ).dict(exclude_none=True)
-                
-            if len(devices) > 1:
-                # 🛑 异常 3：多台匹配，产生歧义，需要用户澄清 (409 冲突 或 300 多项选择)
-                candidates = [{"id": d.id, "title": d.title, "cost": d.cost} for d in devices]
-                return ProblemDetails(
-                    type="urn:error:multiple-devices-found",
-                    title="Multiple Devices Found",
-                    status=409,
-                    detail=f"找到 {len(devices)} 台匹配的设备，请用户明确指定其中一台的 ID。",
-                    extensions={"candidates": candidates} # 利用扩展字段把候选项传给 LLM/前端
-                ).model_dump(exclude_none=True),  # Pydantic v2 用 model_dump，v1 用 .dict()
-            
-            # 唯一匹配
-            final_device_id = devices[0].id
-            final_model_name = devices[0].title
+                    detail=f"未找到串号/IMEI 为 '{final_sn}' 的在库设备。",
+                    extensions={"queried_sn": final_sn}
+                ).model_dump(exclude_none=True)
 
-    # 3. 正常成功路径 (保留你原本的 UI 解析卡片结构)
+        # 🌟 查到設備後，雙向反查補全欄位
+        if device:
+            final_device_id = device.id
+            final_sn = getattr(device, 'sn', final_sn)
+            final_model_name = device.title  # 自動用資料庫中的真實 Title 蓋掉預設 model
+
+    # 🌟 3. 防護降級：若沒傳 db_session 或查不到名稱，保證 model 必有合法字串
+    if not final_model_name or final_model_name.isdigit():
+        if final_device_id:
+            final_model_name = f"设备#{final_device_id}"
+        elif final_sn:
+            final_model_name = f"设备(SN:{final_sn})"
+        else:
+            final_model_name = "未命名设备"
+
+    # 4. 回傳解析數據 (model 100% 不為 null，device_id / sn 其一必有值)
     return {
-        "status": "parsed",  # 明确标识这是正常的卡片数据
+        "status": "parsed",
         "type": "out",
         "action": "sell",
         "device_id": final_device_id,
-        "model": final_model_name,
+        "model": final_model_name,  # 🌟 必有字串值，解決前端顯示 null 的問題
+        "sn": final_sn,
+        "spec": spec,
+        "quantity": quantity,
         "price": sell_price,
         "sell_price": sell_price,
+        "customer_name": customer_name,
+        "customer_phone": customer_phone,
         "payment_method": payment_method,
         "notes": notes,
         "is_pronoun": False,
