@@ -484,7 +484,6 @@ async def confirm_sell_device(
             profit=profit,
             business_type=1,
             business_id=outbound_order.id,
-            payment_status=PaymentStatusEnum.PAYED.value,
             payment_method=payload.payment_method,
             remark=f"设备出售出库：{device.title} | 订单号:{order_sn}",
             shop_id=x_shop_id,
