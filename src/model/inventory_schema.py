@@ -112,6 +112,14 @@ class SellDeviceConfirmPayload(BaseModel):
     payment_method: Optional[str] = Field(default="微信", description="收款方式")
     notes: Optional[str] = Field(default="二手销售", description="备注信息")
 
+    sell_price: Optional[float] = Field(None, description="出售價格")
+    device_id: Optional[int] = Field(default=None, description="設備 ID (與 sn 擇一即可)")
+    sn: Optional[str] = Field(default=None, description="設備串號/IMEI (與 device_id 擇一即可)")
+    customer_name: Optional[str] = Field(default=None, description="客戶姓名")
+    customer_phone: Optional[str] = Field(default=None, description="客戶電話")
+    spec: Optional[str] = Field(default=None, description="設備規格")
+    quantity: Optional[int] = Field(default=1, description="數量")
+
 class DeviceItem(BaseModel):
     model_name: str
     imei: str

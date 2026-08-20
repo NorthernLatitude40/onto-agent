@@ -375,9 +375,77 @@ def clean_device_model(model_str: str, db_session, shop_id: int) -> str:
     return cleaned
 
 
+def _build_outbound_order(
+    shop_id: int,
+    total_amount: Decimal,
+    customer_id: Optional[int] = None,
+    created_by: Optional[int] = None,
+    payment_status: int = 2,  # 預設 2: 已完成
+    remark: Optional[str] = None,
+) -> OutboundOrderModel:
+    """構建標準化的出貨主單實例 (補充完整欄位)"""
+    outbound_no = f"OUT-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
+    return OutboundOrderModel(
+        order_sn=outbound_no,
+        shop_id=shop_id,
+        customer_id=customer_id,
+        created_by=created_by,
+        total_amount=total_amount,
+        payment_status=payment_status,
+        remark=remark,
+    )
+
+
+def _build_outbound_order_item(
+    outbound_order_id: int,
+    inventory_id: int,
+    selling_price: Decimal,
+    quantity: int = 1,
+    purchase_price: Optional[Decimal] = None,
+    profit: Optional[Decimal] = None,
+) -> OutboundOrderItem:
+    """構建標準化的出貨明細實例"""
+    return OutboundOrderItem(
+        outbound_order_id=outbound_order_id,
+        inventory_id=inventory_id,
+        selling_price=selling_price,
+        quantity=quantity,
+        purchase_price=purchase_price,
+        profit=profit,
+    )
+
+
+def _build_financial_record(
+    shop_id: int,
+    amount: Decimal,
+    profit: Decimal,
+    business_id: int,
+    created_by: Optional[int] = None,
+    category: str = "sales",
+    payment_method: Optional[str] = None,
+    device_sn_code: Optional[str] = None,
+    remark: Optional[str] = None,
+) -> FinancialRecord:
+    """構建標準化的財務流水紀錄 (補齊類型與擴展欄位)"""
+    fin_sn = f"FIN-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
+    return FinancialRecord(
+        shop_id=shop_id,
+        type=1,  # 1: 收入
+        record_sn=fin_sn,
+        amount=amount,
+        profit=profit,
+        category=category,
+        business_type=1,  # 銷售業務
+        business_id=business_id,
+        created_by=created_by,
+        payment_method=payment_method,
+        device_sn_code=device_sn_code,
+        remark=remark,
+    )
+
 @router.post(
     "/device/sell",
-    response_model=SellDeviceResponse,  # 🌟 直接指定 Bare Payload 的 Pydantic Response 模型
+    response_model=SellDeviceResponse,
     status_code=status.HTTP_200_OK,
     summary="确认设备出售出库",
 )
@@ -387,9 +455,9 @@ async def confirm_sell_device(
     db: Session = Depends(get_db),
     x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id"),
 ):
-    # ---------------------------------------------------------
-    # 1. Header 校验：缺失直接抛出 BusinessException
-    # ---------------------------------------------------------
+    """
+    單台設備快速出售 (無改動 API 傳參，補齊全量寫入欄位)
+    """
     if not x_shop_id:
         raise BusinessException(
             code=ErrorCode.MISSING_SHOP_ID,
@@ -400,9 +468,7 @@ async def confirm_sell_device(
 
     real_model = clean_device_model(payload.model, db, x_shop_id)
 
-    # ---------------------------------------------------------
-    # 2. 幂等防重锁 (结合店铺隔离)
-    # ---------------------------------------------------------
+    # 冪等鎖
     raw_str = f"sell_{x_shop_id}_{real_model}_{payload.price}_{payload.notes}"
     lock_key = f"lock:device_sell:{hashlib.md5(raw_str.encode()).hexdigest()}"
     is_locked = redis_client.set(lock_key, "locked", ex=5, nx=True)
@@ -416,21 +482,15 @@ async def confirm_sell_device(
         )
 
     try:
-        # ---------------------------------------------------------
-        # 3. 🛡️ 悲观排他锁 (SELECT ... FOR UPDATE) 防并发超卖
-        # ---------------------------------------------------------
+        # 1. 悲觀排他鎖
         query = db.query(InventoryModel).filter(
             InventoryModel.status == StockStatusEnum.IN_STOCK.value,
             InventoryModel.shop_id == x_shop_id,
             InventoryModel.stock_quantity > 0,
+            InventoryModel.title.ilike(f"%{real_model}%")
         )
-
-        query = query.filter(InventoryModel.title.ilike(f"%{real_model}%"))  
-
-        # 锁定选中行记录
         device = query.with_for_update().first()
 
-        # 双重校验：避免排队等待锁出来后库存已被上一事务扣完
         if not device or device.stock_quantity <= 0:
             raise BusinessException(
                 code=ErrorCode.DEVICE_NOT_FOUND_OR_SOLD,
@@ -439,76 +499,67 @@ async def confirm_sell_device(
                 type_url="https://api.yourdomain.com/errors/device-not-found",
             )
 
-        # ---------------------------------------------------------
-        # 4. 核心逻辑：计算金额与安全扣减库存
-        # ---------------------------------------------------------
-        cost_price = float(device.purchase_price or 0)
-        sell_price = payload.price
+        # 2. 金額與庫存扣減 (改用 Decimal 保持精度一致)
+        cost_price = Decimal(str(device.purchase_price or 0))
+        sell_price = Decimal(str(payload.price))
         profit = sell_price - cost_price
 
         device.stock_quantity -= 1
         if device.stock_quantity <= 0:
             device.stock_quantity = 0
-            device.status = StockStatusEnum.SOLD.value  # 已出库
+            device.status = StockStatusEnum.SOLD.value
 
-        # ---------------------------------------------------------
-        # 5. 写入出库单、明细及财务流水
-        # ---------------------------------------------------------
-        order_sn = (
-            f"OUT_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:6].upper()}"
-        )
-        outbound_order = OutboundOrder(
-            order_sn=order_sn,
-            total_amount=sell_price,
-            created_at=datetime.now(),
+        # 3. 補全寫入 OutboundOrder (對齊 /create 補齊 customer_id, payment_status, remark)
+        outbound_order = _build_outbound_order(
             shop_id=x_shop_id,
+            total_amount=sell_price,
+            customer_id=getattr(payload, 'customer_id', None),  # 若前端有帶可擴充，無帶為 None
+            created_by=getattr(payload, 'staff_id', None),
+            payment_status=2,  # 2: 已完成
+            remark=payload.notes or f"單台設備出售: {device.title}",
         )
         db.add(outbound_order)
         db.flush()
 
-        order_item = OutboundOrderItem(
+        # 4. 補全寫入 OutboundOrderItem
+        order_item = _build_outbound_order_item(
             outbound_order_id=outbound_order.id,
             inventory_id=device.id,
+            selling_price=sell_price,
             quantity=1,
             purchase_price=cost_price,
-            selling_price=sell_price,
             profit=profit,
         )
         db.add(order_item)
 
-        financial_record = FinancialRecord(
-            record_sn=f"INC_{order_sn}",
-            type=1,
-            category="手机销售",
+        # 5. 補全寫入 FinancialRecord (對齊 /create 補齊 created_by, category)
+        financial_record = _build_financial_record(
+            shop_id=x_shop_id,
             amount=sell_price,
             profit=profit,
-            business_type=1,
             business_id=outbound_order.id,
+            created_by=getattr(payload, 'staff_id', None),
+            category="手機銷售",
             payment_method=payload.payment_method,
-            remark=f"设备出售出库：{device.title} | 订单号:{order_sn}",
-            shop_id=x_shop_id,
             device_sn_code=device.sn_code,
+            remark=f"設備出售出庫：{device.title} | 訂單號:{outbound_order.order_sn}",
         )
         db.add(financial_record)
 
-        # 提交事务并释放行锁
         db.commit()
 
-        # ---------------------------------------------------------
-        # 6. 🌟 Bare Payload 模式：直接返回 Schema 对象或裸字典
-        # ---------------------------------------------------------
+        # 6. 返回響應 (維持原始 API 契約)
         return SellDeviceResponse(
             id=device.id,
             model=device.title,
-            order_sn=order_sn,
-            sell_price=sell_price,
-            profit=profit,
+            order_sn=outbound_order.order_sn,
+            sell_price=float(sell_price),
+            profit=float(profit),
         )
 
     except BusinessException:
         db.rollback()
         raise
-
     except Exception as e:
         db.rollback()
         logger.exception("【系统错误】设备确认出售失败:")
@@ -518,7 +569,6 @@ async def confirm_sell_device(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             type_url="https://api.yourdomain.com/errors/internal-server-error",
         )
-
     finally:
         redis_client.delete(lock_key)
 
