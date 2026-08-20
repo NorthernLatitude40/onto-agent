@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, or_
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
-from datetime import datetime, date, time as dt_time, timedelta
+from datetime import datetime, date, time as dt_time, timedelta , timezone
+from zoneinfo import ZoneInfo
 
 from src.common.database import get_db # 获取数据库连接
 from src.service.inventory_service import InventoryService
@@ -63,46 +64,75 @@ def get_dashboard_overview(
         description="統計時間維度: today (24小時按時段/今日), 7days (近7天按日), month (近6個月按月)"
     ),
     shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="當前選擇的店鋪ID"),
+    user_tz_str: str = Header("Asia/Tokyo", alias="X-Timezone", description="前端傳入的使用者設備時區 (如 Asia/Tokyo)"),
     db: Session = Depends(get_db),
     current_staff = Depends(allow_shop_manager)
 ):
     target_shop_id = shop_id or getattr(current_staff, "shop_id", 1)
 
-    now = datetime.now()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    # ------------------------------------------------------------------
+    # 1. 動態時區解析與校驗
+    # ------------------------------------------------------------------
+    try:
+        user_tz = ZoneInfo(user_tz_str)
+    except Exception:
+        user_tz_str = "Asia/Tokyo"
+        user_tz = ZoneInfo(user_tz_str)
 
-    # 1. 確定時間範圍與分組時間格式 (Date Format)
+    # 取得「使用者當地」的當前時間，並算出當地的 00:00:00 與 23:59:59
+    now_local = datetime.now(user_tz)
+    local_today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_today_end = now_local.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    # ------------------------------------------------------------------
+    # 2. 確定統計區間 (轉為 UTC 供數據庫篩選) 與 SQL 分組表達式
+    # ------------------------------------------------------------------
+    # 核心 SQL：將 DB 內存的 UTC 時間動態轉為使用者當地的時間進行 to_char 分組
+    local_record_time = func.timezone(user_tz_str, FinancialRecord.record_time)
+    local_created_at = func.timezone(user_tz_str, OutboundOrder.created_at)
+
     if range_type == "7days":
-        start_time = today_start - timedelta(days=6)
-        end_time = today_end
-        date_keys = [(start_time + timedelta(days=i)).strftime("%m-%d") for i in range(7)]
-        date_group_expr = func.to_char(FinancialRecord.record_time, 'MM-DD')
+        # 近 7 天 (包含今天)
+        start_time_local = local_today_start - timedelta(days=6)
+        end_time_local = local_today_end
+        
+        # 前端展示的日期 Key
+        date_keys = [(now_local - timedelta(days=i)).strftime("%m-%d") for i in range(6, -1, -1)]
+        date_group_expr = func.to_char(local_record_time, 'MM-DD')
 
     elif range_type == "month":
-        start_month = (now.month - 5) if now.month > 5 else (now.month + 7)
-        start_year = now.year if now.month > 5 else (now.year - 1)
-        start_time = datetime(start_year, start_month, 1, 0, 0, 0)
-        end_time = today_end
+        # 近 6 個月
+        start_month = (now_local.month - 5) if now_local.month > 5 else (now_local.month + 7)
+        start_year = now_local.year if now_local.month > 5 else (now_local.year - 1)
+        
+        start_time_local = datetime(start_year, start_month, 1, 0, 0, 0, tzinfo=user_tz)
+        end_time_local = local_today_end
 
         date_keys = []
-        curr = start_time
-        while curr <= now:
+        curr = start_time_local
+        while curr <= now_local:
             date_keys.append(curr.strftime("%Y-%m"))
             next_month = curr.month % 12 + 1
             next_year = curr.year + (1 if next_month == 1 else 0)
-            curr = datetime(next_year, next_month, 1)
+            curr = datetime(next_year, next_month, 1, tzinfo=user_tz)
 
-        date_group_expr = func.to_char(FinancialRecord.record_time, 'YYYY-MM')
+        date_group_expr = func.to_char(local_record_time, 'YYYY-MM')
 
     else:
-        # range_type == "today" (默認今日)
-        start_time = today_start
-        end_time = today_end
-        date_keys = [f"{i:02d}:00" for i in range(24)]
-        date_group_expr = func.to_char(FinancialRecord.record_time, 'HH24:00')
+        # range_type == "today" (預設今日 24 小時)
+        start_time_local = local_today_start
+        end_time_local = local_today_end
 
-    # 2. 查詢【在庫設備總數】
+        date_keys = [f"{i:02d}:00" for i in range(24)]
+        date_group_expr = func.to_char(local_record_time, 'HH24:00')
+
+    # 將當地時間轉為絕對 UTC 時間傳給 SQL 條件，精準命中索引
+    start_time_utc = start_time_local.astimezone(timezone.utc)
+    end_time_utc = end_time_local.astimezone(timezone.utc)
+
+    # ------------------------------------------------------------------
+    # 3. 查詢【在庫設備總數】(當前狀態快照，不限時間)
+    # ------------------------------------------------------------------
     in_stock_count = db.query(
         func.coalesce(func.sum(Inventory.stock_quantity), 0)
     ).filter(
@@ -110,32 +140,38 @@ def get_dashboard_overview(
         Inventory.status == StockStatusEnum.IN_STOCK.value
     ).scalar() or 0
 
-    # 3. 總體統計指標 (修復 profit 計算：取消 case 限制，直接 SUM 全量 profit 欄位)
+    # ------------------------------------------------------------------
+    # 4. 總體財務指標 (收入、支出、利潤)
+    # ------------------------------------------------------------------
     total_stats = db.query(
         func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.amount), else_=0.0)), 0.0).label("income"),
         func.coalesce(func.sum(case((FinancialRecord.type == 2, FinancialRecord.amount), else_=0.0)), 0.0).label("expense"),
         func.coalesce(func.sum(FinancialRecord.profit), 0.0).label("profit")
     ).filter(
         FinancialRecord.shop_id == target_shop_id,
-        FinancialRecord.record_time >= start_time,
-        FinancialRecord.record_time <= end_time
+        FinancialRecord.record_time >= start_time_utc,
+        FinancialRecord.record_time <= end_time_utc
     ).first()
 
     income = float(total_stats.income or 0.0)
     expense = float(total_stats.expense or 0.0)
     profit = float(total_stats.profit or 0.0)
 
-    # 4. 查詢該時間段內的成交單數
+    # ------------------------------------------------------------------
+    # 5. 查詢時間段內的【成交單數】
+    # ------------------------------------------------------------------
     order_count = db.query(
         func.count(OutboundOrder.id)
     ).filter(
         OutboundOrder.shop_id == target_shop_id,
         OutboundOrder.payment_status == PaymentStatusEnum.PAYED.value,
-        OutboundOrder.created_at >= start_time,
-        OutboundOrder.created_at <= end_time
+        OutboundOrder.created_at >= start_time_utc,
+        OutboundOrder.created_at <= end_time_utc
     ).scalar() or 0
 
-    # 5. 趨勢圖表分組 SQL 查詢 (同樣直接 SUM 全量 profit 欄位)
+    # ------------------------------------------------------------------
+    # 6. 趨勢圖表 SQL 分組查詢
+    # ------------------------------------------------------------------
     trend_query = db.query(
         date_group_expr.label("date_group"),
         func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.amount), else_=0.0)), 0.0).label("income"),
@@ -143,13 +179,13 @@ def get_dashboard_overview(
         func.coalesce(func.sum(FinancialRecord.profit), 0.0).label("profit")
     ).filter(
         FinancialRecord.shop_id == target_shop_id,
-        FinancialRecord.record_time >= start_time,
-        FinancialRecord.record_time <= end_time
+        FinancialRecord.record_time >= start_time_utc,
+        FinancialRecord.record_time <= end_time_utc
     ).group_by(
         date_group_expr
     ).all()
 
-    # 將數據庫查詢結果轉為字典映射
+    # 轉為 Key-Value 映射表
     db_trend_map: Dict[str, dict] = {}
     for row in trend_query:
         group_key = str(row.date_group)
@@ -159,7 +195,9 @@ def get_dashboard_overview(
             "profit": round(float(row.profit), 2)
         }
 
-    # 6. 內存補齊缺失日期 (補零操作)
+    # ------------------------------------------------------------------
+    # 7. 內存補齊缺失日期 (補零操作)
+    # ------------------------------------------------------------------
     trend_list: List[Dict] = []
     for key in date_keys:
         data = db_trend_map.get(key, {"income": 0.0, "expense": 0.0, "profit": 0.0})
@@ -170,7 +208,9 @@ def get_dashboard_overview(
             "profit": data["profit"]
         })
 
-    # 7. 返回組裝完成的數據
+    # ------------------------------------------------------------------
+    # 8. 回傳封裝好的 JSON 數據
+    # ------------------------------------------------------------------
     return {
         "profit": round(profit, 2),
         "income": round(income, 2),
@@ -214,7 +254,7 @@ def global_search(
             "status": "在库" if stock.status == 1 else "已售",
             "cost_price": float(stock.purchase_price or 0), # 对应 purchase_price
             "price": float(stock.selling_price or 0),       # 对应 selling_price
-            "created_at": stock.created_at.strftime("%Y-%m-%d %H:%M") if stock.created_at else ""
+            "created_at": stock.created_at.isoformat()
         }
         for stock in stocks_query
     ]
@@ -237,7 +277,7 @@ def global_search(
             "customer_name": order.customer.name if order.customer else "散客",
             "phone": order.customer.phone if order.customer else "",
             "total_amount": float(order.total_amount or 0),
-            "created_at": order.created_at.strftime("%Y-%m-%d %H:%M") if order.created_at else ""
+            "created_at": order.created_at.isoformat()
         }
         for order in orders_query
     ]

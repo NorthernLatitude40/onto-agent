@@ -692,7 +692,7 @@ def search_inventory_by_sn(
         "cost_price": float(inventory.cost_price) if getattr(inventory, 'cost_price', None) else 0.0,
         "selling_price": float(inventory.selling_price) if getattr(inventory, 'selling_price', None) else 0.0,
         "retail_price": float(inventory.retail_price) if getattr(inventory, 'retail_price', None) else 0.0,
-        "created_at": inventory.created_at.strftime("%Y-%m-%d %H:%M:%S") if getattr(inventory, 'created_at', None) else None
+        "created_at": inventory.created_at.isoformat()
     }
 
 @router.get("/detail/{order_id}")
@@ -762,7 +762,7 @@ async def get_sales_detail(
             "partner_name": partner_name,
             "partner_phone": partner_phone,
             "total_amount": float(order.total_amount or getattr(order, "selling_price", 0.0) or 0.0),
-            "created_at": order.created_at.strftime("%Y-%m-%d %H:%M:%S") if order.created_at else "",
+            "created_at": order.created_at.isoformat(),
             "devices": devices
         }
     }

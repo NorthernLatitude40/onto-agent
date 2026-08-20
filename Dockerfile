@@ -6,7 +6,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-ENV TZ=Asia/Singapore
+ENV TZ=UTC
 
 # 安裝基礎系統依賴
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc, func
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.common.database import get_db
 from src.model.inventory_model import InventoryModel  # 庫存/設備表
@@ -92,7 +92,7 @@ def get_order_list(
                 "total_amount": float(inv.purchase_price or 0.0),
                 "total_profit": 0.0,
                 "status": inv.status,
-                "created_at": inv.created_at
+                "created_at": inv.created_at.isoformat()
             })
 
     # 2. 查詢銷售/出庫單據 (order_type == 2 或未指定)
@@ -140,7 +140,7 @@ def get_order_list(
                     "total_profit": float(order.total_profit or 0.0),
                     "status": order.payment_status,
                     "order_item_count": int(total_quantity or 0),  # 帶入 SQLAlchemy 計算出的總數量
-                    "created_at": order.created_at
+                    "created_at": order.created_at.isoformat()
                 })
 
     # 3. 按時間倒序排序 (最新單據排在最前面)
@@ -207,7 +207,7 @@ def get_purchase_detail(inv_id: int, db: Session = Depends(get_db)):
             "partner_name": partner_name,
             "partner_phone": partner_phone,
             "total_amount": float(inv.purchase_price or 0.0),
-            "created_at": inv.created_at.strftime("%Y-%m-%d %H:%M:%S") if inv.created_at else "",
+            "created_at": inv.created_at.isoformat(),
             "items": items
         }
     }
@@ -228,7 +228,7 @@ def confirm_inbound(req: ConfirmInboundRequest, db: Session = Depends(get_db)):
     try:
         # 更新狀態為已入庫 (2)
         inv.status = 2
-        inv.updated_at = datetime.now()
+        inv.updated_at = datetime.now(timezone.utc)
         
         # 若有相關庫存數量變更邏輯，在此處寫入
         # db.add(inventory_stock) ...

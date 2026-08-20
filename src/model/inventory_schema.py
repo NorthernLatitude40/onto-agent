@@ -27,12 +27,16 @@ class StockItemOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    # 🌟 序列化器：自動將 datetime 轉為 "YYYY-MM-DD HH:mm:ss" 格式
-    @field_serializer('in_stock_time')
-    def serialize_in_stock_time(self, dt: Optional[datetime], _info) -> Optional[str]:
+
+    # 🌟 核心：自動將 datetime 欄位序列化為帶 UTC 標記的 ISO 8601 字串
+    @field_serializer("in_stock_time", "created_at", check_fields=False)
+    def serialize_dt_to_iso(self, dt: Optional[datetime]) -> Optional[str]:
         if dt is None:
             return None
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
+        # 如果是 Naive datetime (無時區資訊)，強制補上 UTC 時區標籤
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
 
     # 🌟 計算屬性：自動計算庫齡（天數）並加入返回 JSON 中
     @computed_field
