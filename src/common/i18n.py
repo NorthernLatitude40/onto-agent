@@ -71,6 +71,12 @@ TRANSLATIONS.update({
         "en-US": "設備不存在或者已售",
         "ja-JP": "設備不存在或者已售"
     },
+    "INTERNAL_SERVER_ERROR": {
+        "zh-CN": "服务器内部数据错误",
+        "en-US": "服务器内部数据错误",
+        "ja-JP": "服务器内部数据错误"
+    },
+    
     
 })
 
