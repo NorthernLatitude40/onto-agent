@@ -54,16 +54,15 @@ dashboard_router = APIRouter(prefix="/api/v1/dashboard", tags=["首页看板"])
     "/overview",
     response_model=DashboardOverviewResponse,
     status_code=status.HTTP_200_OK,
-    summary="获取首页概览与报表趋势数据"
+    summary="獲取首頁概覽與報表趨勢數據"
 )
 def get_dashboard_overview(
-    # 使用 alias="range" 确保前端依然传递 ?range=today，但在函数内部使用 range_type 避免覆盖内置 range()
     range_type: str = Query(
         "today",
         alias="range",
-        description="统计时间维度: today (24小时按时段/今日), 7days (近7天按日), month (近6个月按月)"
+        description="統計時間維度: today (24小時按時段/今日), 7days (近7天按日), month (近6個月按月)"
     ),
-    shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
+    shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="當前選擇的店鋪ID"),
     db: Session = Depends(get_db),
     current_staff = Depends(allow_shop_manager)
 ):
@@ -73,28 +72,23 @@ def get_dashboard_overview(
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-    # 1. 确定时间范围与分组时间格式 (Date Format)
+    # 1. 確定時間範圍與分組時間格式 (Date Format)
     if range_type == "7days":
         start_time = today_start - timedelta(days=6)
         end_time = today_end
-        # 生成连续的日期 Key 列表 (用于后续补零)
         date_keys = [(start_time + timedelta(days=i)).strftime("%m-%d") for i in range(7)]
-        # SQL 日期格式化表达 (PostgreSQL/MySQL 兼容写法)
         date_group_expr = func.to_char(FinancialRecord.record_time, 'MM-DD')
 
     elif range_type == "month":
-        # 近 6 个月趋势：计算 5 个月前的 1 号
         start_month = (now.month - 5) if now.month > 5 else (now.month + 7)
         start_year = now.year if now.month > 5 else (now.year - 1)
         start_time = datetime(start_year, start_month, 1, 0, 0, 0)
         end_time = today_end
 
-        # 生成近 6 个月月份 Key 列表
         date_keys = []
         curr = start_time
         while curr <= now:
             date_keys.append(curr.strftime("%Y-%m"))
-            # 递增一个月
             next_month = curr.month % 12 + 1
             next_year = curr.year + (1 if next_month == 1 else 0)
             curr = datetime(next_year, next_month, 1)
@@ -102,26 +96,25 @@ def get_dashboard_overview(
         date_group_expr = func.to_char(FinancialRecord.record_time, 'YYYY-MM')
 
     else:
-        # range_type == "today" (默认今日)
+        # range_type == "today" (默認今日)
         start_time = today_start
         end_time = today_end
-        # 今日 24 小时节点: 00:00, 01:00... 23:00
         date_keys = [f"{i:02d}:00" for i in range(24)]
         date_group_expr = func.to_char(FinancialRecord.record_time, 'HH24:00')
 
-    # 2. 查询【在库设备总数】
+    # 2. 查詢【在庫設備總數】
     in_stock_count = db.query(
         func.coalesce(func.sum(Inventory.stock_quantity), 0)
     ).filter(
         Inventory.shop_id == target_shop_id,
         Inventory.status == StockStatusEnum.IN_STOCK.value
-    ).scalar()
+    ).scalar() or 0
 
-    # 3. 总体统计指标 (当前 range_type 汇总)
+    # 3. 總體統計指標 (修復 profit 計算：取消 case 限制，直接 SUM 全量 profit 欄位)
     total_stats = db.query(
         func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.amount), else_=0.0)), 0.0).label("income"),
         func.coalesce(func.sum(case((FinancialRecord.type == 2, FinancialRecord.amount), else_=0.0)), 0.0).label("expense"),
-        func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.profit), else_=0.0)), 0.0).label("profit")
+        func.coalesce(func.sum(FinancialRecord.profit), 0.0).label("profit")
     ).filter(
         FinancialRecord.shop_id == target_shop_id,
         FinancialRecord.record_time >= start_time,
@@ -132,7 +125,7 @@ def get_dashboard_overview(
     expense = float(total_stats.expense or 0.0)
     profit = float(total_stats.profit or 0.0)
 
-    # 4. 查询该时间段内的成交单数
+    # 4. 查詢該時間段內的成交單數
     order_count = db.query(
         func.count(OutboundOrder.id)
     ).filter(
@@ -142,12 +135,12 @@ def get_dashboard_overview(
         OutboundOrder.created_at <= end_time
     ).scalar() or 0
 
-    # 5. 趋势图表分组 SQL 查询 (Group By Date)
+    # 5. 趨勢圖表分組 SQL 查詢 (同樣直接 SUM 全量 profit 欄位)
     trend_query = db.query(
         date_group_expr.label("date_group"),
         func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.amount), else_=0.0)), 0.0).label("income"),
         func.coalesce(func.sum(case((FinancialRecord.type == 2, FinancialRecord.amount), else_=0.0)), 0.0).label("expense"),
-        func.coalesce(func.sum(case((FinancialRecord.type == 1, FinancialRecord.profit), else_=0.0)), 0.0).label("profit")
+        func.coalesce(func.sum(FinancialRecord.profit), 0.0).label("profit")
     ).filter(
         FinancialRecord.shop_id == target_shop_id,
         FinancialRecord.record_time >= start_time,
@@ -156,7 +149,7 @@ def get_dashboard_overview(
         date_group_expr
     ).all()
 
-    # 将数据库查询结果转为字典格式映射
+    # 將數據庫查詢結果轉為字典映射
     db_trend_map: Dict[str, dict] = {}
     for row in trend_query:
         group_key = str(row.date_group)
@@ -166,7 +159,7 @@ def get_dashboard_overview(
             "profit": round(float(row.profit), 2)
         }
 
-    # 6. 内存补齐缺失日期 (补零操作，确保 X 轴连续不移位)
+    # 6. 內存補齊缺失日期 (補零操作)
     trend_list: List[Dict] = []
     for key in date_keys:
         data = db_trend_map.get(key, {"income": 0.0, "expense": 0.0, "profit": 0.0})
@@ -177,7 +170,7 @@ def get_dashboard_overview(
             "profit": data["profit"]
         })
 
-    # 7. 返回组装完成的数据
+    # 7. 返回組裝完成的數據
     return {
         "profit": round(profit, 2),
         "income": round(income, 2),

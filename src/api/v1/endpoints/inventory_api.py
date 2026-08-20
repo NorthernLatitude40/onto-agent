@@ -875,6 +875,9 @@ def refund_outbound_order(
         # 3. 更新銷售單據狀態為 已退款 (0)
         order.payment_status = 0
 
+        # 1. 查出原始銷售單或原始財務紀錄
+        original_order = db.query(OutboundOrder).filter(OutboundOrder.id == order.id).first()
+
         # 4. 生成負數收入與毛利（紅字衝減）
         fin_sn = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-{current_staff.id}"
         financial_record = FinancialRecord(
@@ -887,7 +890,8 @@ def refund_outbound_order(
             category="sales_refund",
             business_id=order.id,
             created_by=current_staff.id,
-            remark=f"銷售單退貨衝減: {order.order_sn}"
+            remark=f"銷售單退貨衝減: {order.order_sn}",
+            record_time=original_order.created_at
         )
         db.add(financial_record)
 
