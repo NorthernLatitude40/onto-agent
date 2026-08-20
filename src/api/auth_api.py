@@ -374,7 +374,7 @@ async def get_my_info(
         phone=getattr(current_user, "phone", None) or staff_profile.phone,
         avatar_url=getattr(current_user, "avatar_url", None) or staff_profile.avatar,
         shop_id=x_shop_id,
-        created_at=staff_profile.created_at,
+        created_at=staff_profile.created_at.isoformat(),
         default_shop_id=getattr(current_user, "default_shop_id", 1),
         default_staff_id=getattr(current_user, "default_staff_id", 1)
     )
@@ -498,6 +498,7 @@ def update_my_info(
     staff_phone = getattr(staff, "phone", None) or getattr(current_user, "phone", None)
     avatar = getattr(current_user, "avatar_url", None) or (getattr(staff, "avatar", None) if staff else None)
     default_shop_id = getattr(current_user, "default_shop_id", None) or target_shop_id
+    dt_obj = staff.created_at if staff else getattr(current_user, "created_at", None)
 
     return UserResponse(
         id=staff.id if staff else current_user.id,
@@ -508,5 +509,5 @@ def update_my_info(
         avatar_url=avatar,
         shop_id=target_shop_id,
         default_shop_id=default_shop_id,
-        created_at=staff.created_at if staff else getattr(current_user, "created_at", None)
+        created_at=dt_obj.isoformat() if dt_obj else None
     )
