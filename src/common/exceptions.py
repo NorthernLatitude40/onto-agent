@@ -125,13 +125,13 @@ def register_exception_handlers(app: FastAPI) -> None:
         problem_details = ProblemDetails(
             type="about:blank",
             title="VALIDATION_ERROR",
-            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Input validation failed.",
             instance=str(request.url.path),
             invalid_params=exc.errors(),
         )
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content=problem_details.model_dump(exclude_none=True),
             media_type="application/problem+json",
         )

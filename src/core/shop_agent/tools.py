@@ -3,7 +3,7 @@ import time
 import uuid
 import traceback
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 
 from sqlalchemy import create_engine, Column, BigInteger, String, Numeric, DateTime, func, or_
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -34,27 +34,14 @@ logger = logging.getLogger(__name__)
 # ==========================================
 
 class AddDeviceInput(BaseModel):
-    supplier_phone: str = Field(
-        description="客戶聯係方式"
-    )
-    supplier_name: str = Field(
-        description="客戶名稱"
-    )
-    product_type: int = Field(
-        description="1-新機，2-二手手機"
-    )
-    model: str = Field(
-        description="手机型号及版本容量，例如：iPhone 13 128G、华为 Mate 60 Pro 256G"
-    )
-    cost_price: float = Field(
-        description="回收/采购成本价格（纯数字，单位元），例如：1900"
-    )
-    color: Optional[str] = Field(
-        default="未知", description="手机颜色，例如：黑色、远峰蓝"
-    )
-    notes: Optional[str] = Field(
-        default="二手回收", description="设备成色描述、是否有拆修或故障说明"
-    )
+    supplier_phone: str = Field(description="客戶聯係方式，無說明則填空字串")
+    supplier_name: str = Field(description="客戶名稱，無說明則填空字串")
+    product_type: int = Field(description="1-新機，2-二手手機")
+    model: str = Field(description="手機型號及版本容量，例如：iPhone 13 128G")
+    cost_price: float = Field(description="回收/採購成本價格（純數字，單位元），例如：1900")
+    serials: List[str] = Field(default=[], description="設備串號/IMEI/SN碼列表，若無則填空陣列 []")
+    color: str = Field(description="手機顏色，例如：黑色、遠峰藍。若未知則填 '未知'")
+    notes: str = Field(description="設備成色描述，若無說明則填 '無'")
 
 
 # 1. 重新设计入参 Schema：区分 device_id 与 model

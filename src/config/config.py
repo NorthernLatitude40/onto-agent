@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     # --- AI / LLM 服务 API Keys ---
     GEMINI_API_KEY: str | None = None
+    SILICONFLOW_API_KEY: str | None = None
     OPENROUTER_API_KEY: str | None = None
     HUGGINGFACEHUB_API_TOKEN: str | None = Field(default=None, alias="HUGGING_FACE_API_KEY")
 
