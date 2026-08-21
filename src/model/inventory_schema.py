@@ -121,6 +121,7 @@ class SellDeviceConfirmPayload(BaseModel):
     sn: Optional[str] = Field(default=None, description="設備串號/IMEI (與 device_id 擇一即可)")
     customer_name: Optional[str] = Field(default=None, description="客戶姓名")
     customer_phone: Optional[str] = Field(default=None, description="客戶電話")
+    customer_id: Optional[int] = Field(default=None, description="客戶id")
     spec: Optional[str] = Field(default=None, description="設備規格")
     quantity: Optional[int] = Field(default=1, description="數量")
 
