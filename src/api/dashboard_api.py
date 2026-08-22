@@ -248,9 +248,9 @@ def global_search(
     stocks_res = [
         {
             "id": str(stock.id),
-            "brand": "",                  # 你的模型里没有 brand，传空或合并到 title
-            "model_name": stock.title,    # 对应你的 title 字段
-            "imei": stock.sn_code,        # 对应你的 sn_code 串号
+            "brand": "",                                  # 你的模型里没有 brand，传空或合并到 title
+            "model_name": stock.title,                    # 对应你的 title 字段
+            "imei": stock.sn_code,                        # 对应你的 sn_code 串号
             "status": "在库" if stock.status == 1 else "已售",
             "cost_price": float(stock.purchase_price or 0), # 对应 purchase_price
             "price": float(stock.selling_price or 0),       # 对应 selling_price
@@ -259,8 +259,11 @@ def global_search(
         for stock in stocks_query
     ]
 
-    # 2. 检索订单（匹配订单号、客户姓名、客户手机号）
-    orders_query = db.query(OutboundOrder).outerjoin(Partner).filter(
+    # 2. 检索订单（修复点：为 outerjoin 显式指定关联 ON 条件）
+    # 注意：如果你的 OutboundOrder 表里存客户外键的字段叫 customer_id，请将下面的 partner_id 改为 customer_id
+    orders_query = db.query(OutboundOrder).outerjoin(
+        Partner, OutboundOrder.customer_id == Partner.id
+    ).filter(
         OutboundOrder.shop_id == x_shop_id,
         or_(
             OutboundOrder.order_sn.ilike(keyword),
@@ -272,10 +275,10 @@ def global_search(
     orders_res = [
         {
             "id": str(order.id),
-            "order_no": order.order_no,
-            "status": order.status,  # 如: 'completed', 'pending'
-            "customer_name": order.customer.name if order.customer else "散客",
-            "phone": order.customer.phone if order.customer else "",
+            "order_no": getattr(order, "order_no", order.order_sn), # 优先读取 order_no，若无则读 order_sn
+            "status": order.payment_status,  # 如: 'completed', 'pending'
+            "customer_name": order.customer.name if getattr(order, "customer", None) else "散客",
+            "phone": order.customer.phone if getattr(order, "customer", None) else "",
             "total_amount": float(order.total_amount or 0),
             "created_at": order.created_at.isoformat()
         }
@@ -291,7 +294,6 @@ def global_search(
             "orders": orders_res
         }
     }
-
 
 
 
