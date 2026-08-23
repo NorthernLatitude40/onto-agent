@@ -237,6 +237,7 @@ def global_search(
     # 1. 检索在库设备（精准匹配你的 InventoryModel 字段：sn_code, title, spec, remark）
     stocks_query = db.query(InventoryModel).filter(
         InventoryModel.shop_id == x_shop_id,
+        InventoryModel.status == StockStatusEnum.IN_STOCK.value,
         or_(
             InventoryModel.sn_code.ilike(keyword),
             InventoryModel.title.ilike(keyword),
@@ -251,7 +252,7 @@ def global_search(
             "brand": "",                                  # 你的模型里没有 brand，传空或合并到 title
             "model_name": stock.title,                    # 对应你的 title 字段
             "imei": stock.sn_code,                        # 对应你的 sn_code 串号
-            "status": "在库" if stock.status == 1 else "已售",
+            "status": "在库",
             "cost_price": float(stock.purchase_price or 0), # 对应 purchase_price
             "price": float(stock.selling_price or 0),       # 对应 selling_price
             "created_at": stock.created_at.isoformat()
