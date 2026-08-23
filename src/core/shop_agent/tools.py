@@ -97,12 +97,15 @@ def add_device(model: str,
                notes: str = "二手回收", 
                product_type: int = 2,
                supplier_phone: str = "",
-               supplier_name: str = ""
+               supplier_name: str = "",
+               serials: List[str] | None = None
                ) -> dict:
     """
     用于识别用户收机/进货/入库设备的意图并提取参数。
     当用户说“收了/买入/进货/录入某台手机”时，必须调用此工具提取参数。
     """
+    if serials is None:
+       serials = []
     return {
         "supplier_phone": supplier_phone,
         "supplier_name": supplier_name,
@@ -114,6 +117,7 @@ def add_device(model: str,
         "cost": cost_price,
         "cost_price": cost_price,
         "color": color,
+        "serials": serials,
         "notes": f"颜色:{color} | {notes}" if color != "未知" else notes
     }
 

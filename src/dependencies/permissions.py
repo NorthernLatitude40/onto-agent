@@ -62,7 +62,10 @@ class ShopRoleChecker:
         # ---------------------------------------------------------
         # 2. 从 StaffModel 单表中精准定位员工档案 
         # ---------------------------------------------------------
-        logger.info("从 StaffModel 单表中精准定位员工档案usr_id, shopid, staffid",current_user.id,target_shop_id,staff_id)
+        logger.info(
+                "从 StaffModel 单表中精准定位员工档案 usr_id=%s, shopid=%s, staffid=%s",
+                current_user.id, target_shop_id, staff_id
+            )
         staff = db.query(StaffModel).filter(
             StaffModel.user_id == current_user.id,
             StaffModel.shop_id == target_shop_id,
