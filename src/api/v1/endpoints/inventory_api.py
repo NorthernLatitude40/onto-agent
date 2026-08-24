@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.common.database import get_db, get_db_async # 获取数据库连接
 from src.service.inventory_service import InventoryService
 from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
-from src.core.shop_agent.system import ShopAgentSystem
 from src.common.dict import ShopRole
 from src.model.models import FinancialRecord
 from src.model.inventory_model import InventoryModel as Inventory

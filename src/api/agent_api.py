@@ -14,15 +14,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.common.exceptions import BusinessException, register_exception_handlers
-from src.core.shop_agent.system import ShopAgentSystem
 from src.config.config import settings
 
 
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger("API_SERVICE")
-
-shop_agent = ShopAgentSystem()
 
 # ----------------------------------------------------------------------
 # Dependencies & Helpers

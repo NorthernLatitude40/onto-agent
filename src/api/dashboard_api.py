@@ -19,7 +19,6 @@ from zoneinfo import ZoneInfo
 from src.common.database import get_db # 获取数据库连接
 from src.service.inventory_service import InventoryService
 from src.common.constants import TOKEN_EXPIRE_HOURS, JWT_ALGORITHM
-from src.core.shop_agent.system import ShopAgentSystem
 from src.common.dict import ShopRole
 from src.model.models import FinancialRecord
 from src.model.inventory_model import InventoryModel as Inventory
@@ -44,10 +43,10 @@ from src.common.i18n import ErrorCode, get_i18n_message
 from src.common.redis_client import redis_client
 from src.model.inventory_schema import StockListResponse, SellDeviceResponse
 from src.common.dict import StockStatusEnum, PaymentStatusEnum
+# 导入共享的 Harness 实例
+from src.core.harness import harness
 
 logger = logging.getLogger(__name__)
-
-shop_agent = ShopAgentSystem()
 
 dashboard_router = APIRouter(prefix="/api/v1/dashboard", tags=["首页看板"])
 
@@ -303,142 +302,188 @@ shop_router = APIRouter(prefix="/api/v1/shop", tags=["店铺业务"])
 
 
 # ──────── 业务 B 接口 (手机店小程序) ────────
-# 1. 定義標準的請求載荷（Payload）
+
+# 1. 定义标准的请求载荷（Payload）
 class ChatPayload(BaseModel):
     message: str
-    session_id: str | None = None  # 允許外部傳入自訂的會話 ID，用於辨識不同用戶
+    session_id: Optional[str] = None  # 允许外部传入自定义的会话 ID，用于辨识不同用户
 
+
+# 2. 辅助解析函数：递归提取 JSON 对象（解决多重转义/套娃字符串）
+def extract_json_from_str(text_or_obj: Any) -> Optional[dict]:
+    """把各种格式（包括 list、带 ```json 的字符串、嵌套 JSON 字符串）强行转为 dict"""
+    if isinstance(text_or_obj, dict):
+        return text_or_obj
+
+    if isinstance(text_or_obj, list):
+        combined_text = ""
+        for item in text_or_obj:
+            if isinstance(item, dict):
+                combined_text += item.get("text", "")
+            else:
+                combined_text += str(item)
+        return extract_json_from_str(combined_text)
+
+    if isinstance(text_or_obj, str):
+        clean_str = text_or_obj.strip()
+        # 贪婪匹配 JSON 结构
+        json_match = re.search(
+            r"```json\s*(\{.*\})\s*```", clean_str, re.DOTALL
+        ) or re.search(r"(\{.*\})", clean_str, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(1))
+            except Exception:
+                pass
+    return None
+
+
+# 3. 核心业务解析器：抽取 Reply、ParsedData 与防御拦截
+def process_shop_agent_response(messages: list[Any]) -> dict[str, Any]:
+    """对 Agent 输出的消息栈进行全流程解包、工具消息回溯以及防御拦截处理"""
+    if not messages:
+        return {"reply": "", "parsedData": None}
+
+    last_msg = messages[-1]
+
+    # 兼容对象属性 (.content) 与字典键 (['content'])
+    if hasattr(last_msg, "content"):
+        raw_content = last_msg.content or ""
+    elif isinstance(last_msg, dict):
+        raw_content = last_msg.get("content", "") or ""
+    else:
+        raw_content = str(last_msg) if last_msg is not None else ""
+
+    reply_text = ""
+    parsed_data = None
+
+    # 🌟 步骤 1：【第一优先级】优先解包 LLM 产生的内层 JSON 结构！
+    llm_json = extract_json_from_str(raw_content)
+
+    if isinstance(llm_json, dict) and "reply" in llm_json:
+        # 拿到外层的 reply
+        reply_text = llm_json.get("reply", "")
+        parsed_data = llm_json.get("parsedData", None)
+
+        # 🌟 关键点：如果内层 reply 依然是个 JSON 字符串，再解一次包！
+        inner_json = extract_json_from_str(reply_text)
+        if isinstance(inner_json, dict) and "reply" in inner_json:
+            reply_text = inner_json.get("reply", "")
+            # 如果内层解析出了更好的 parsedData (如 urn:error)，覆盖它
+            if inner_json.get("parsedData"):
+                parsed_data = inner_json.get("parsedData")
+
+    # 🌟 步骤 2：【第二优先级】如果 LLM 没提供 parsedData，再去拿 ToolMessage
+    if not parsed_data:
+        for msg in reversed(messages):
+            msg_type = (
+                getattr(msg, "type", None)
+                if not isinstance(msg, dict)
+                else msg.get("type")
+            )
+            class_name = msg.__class__.__name__
+
+            # 遇到上一轮用户消息就停止回溯
+            if msg_type == "user" or class_name == "HumanMessage":
+                break
+
+            if msg_type == "tool" or class_name == "ToolMessage":
+                content = (
+                    getattr(msg, "content", None)
+                    if not isinstance(msg, dict)
+                    else msg.get("content")
+                )
+                if isinstance(content, dict):
+                    parsed_data = content
+                elif isinstance(content, str) and content.strip():
+                    try:
+                        parsed_data = json.loads(content)
+                    except Exception:
+                        try:
+                            parsed_data = ast.literal_eval(content)
+                        except Exception:
+                            pass
+                if parsed_data:
+                    break
+
+    # 如果 reply_text 没拿到，兜底为 raw_content
+    if not reply_text:
+        reply_text = (
+            raw_content if isinstance(raw_content, str) else str(raw_content)
+        )
+
+    # 🌟 步骤 3：【防御拦截】消除非法卡片 (设备 ID 为空的情况)
+    if parsed_data and isinstance(parsed_data, dict):
+        # 如果 action 是 sell 且 device_id 为 None，说明大模型在没有指定设备 ID 的情况下盲目发了卡片
+        if (
+            parsed_data.get("action") == "sell"
+            and parsed_data.get("device_id") is None
+        ):
+            # 1. 扔掉这个无意义的 parsedData，防止前端渲染出无法出库的卡片
+            parsed_data = None
+            # 2. 如果提示语不够明确，提示用户补全 ID
+            if "请提供" not in reply_text and "哪一台" not in reply_text:
+                reply_text += " （请补充具体要出售的设备 ID）"
+
+    # 4. 组装返回
+    return {"reply": reply_text, "parsedData": parsed_data}
+
+
+# 4. 手机店 Chat API 路由
 @shop_router.post("/chat")
 async def shop_chat(
     req: ChatPayload,
     x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id"),
     x_user_role: Optional[str] = Header("staff", alias="X-User-Role"),
 ):
-  if not x_shop_id:
-    raise HTTPException(status_code=400, detail="请求头缺少 X-Shop-Id")
+    if not x_shop_id:
+        raise HTTPException(status_code=400, detail="请求头缺少 X-Shop-Id")
 
-  config = {
-      "configurable": {
-          "thread_id": req.session_id or "default_session",
-          "shop_id": x_shop_id,
-          "role": x_user_role,
-      }
-  }
+    session_id = req.session_id or "default_session"
 
-  # 执行 Agent
-  result = await shop_agent.graph.ainvoke(
-      {"messages": [("user", req.message)]}, config
-  )
-  messages = result["messages"]
-  last_msg = messages[-1]
+    extra_config = {
+        "shop_id": x_shop_id,
+        "role": x_user_role,
+    }
 
-  raw_content = last_msg.content or ""
-
-  # ---------------------------------------------------------
-  # 辅助函数：递归提取 JSON 对象（解决多重转义/套娃字符串）
-  # ---------------------------------------------------------
-  def extract_json_from_str(text_or_obj):
-    """把各种格式（包括 list、带 ```json 的字符串、嵌套 JSON 字符串）强行转为 dict"""
-    if isinstance(text_or_obj, dict):
-      return text_or_obj
-
-    if isinstance(text_or_obj, list):
-      combined_text = ""
-      for item in text_or_obj:
-        if isinstance(item, dict):
-          combined_text += item.get("text", "")
-        else:
-          combined_text += str(item)
-      return extract_json_from_str(combined_text)
-
-    if isinstance(text_or_obj, str):
-      clean_str = text_or_obj.strip()
-      # 贪婪匹配 JSON 结构
-      json_match = re.search(
-          r"```json\s*(\{.*\})\s*```", clean_str, re.DOTALL
-      ) or re.search(r"(\{.*\})", clean_str, re.DOTALL)
-      if json_match:
-        try:
-          return json.loads(json_match.group(1))
-        except Exception:
-          pass
-    return None
-
-  # ---------------------------------------------------------
-  # 🌟 步骤 1：【第一优先级】优先解包 LLM 产生的内层 JSON 结构！
-  # ---------------------------------------------------------
-  reply_text = ""
-  parsed_data = None
-
-  llm_json = extract_json_from_str(raw_content)
-
-  if isinstance(llm_json, dict) and "reply" in llm_json:
-    # 拿到外层的 reply
-    reply_text = llm_json.get("reply", "")
-    parsed_data = llm_json.get("parsedData", None)
-
-    # 🌟 关键点：如果内层 reply 依然是个 JSON 字符串，再解一次包！
-    inner_json = extract_json_from_str(reply_text)
-    if isinstance(inner_json, dict) and "reply" in inner_json:
-      reply_text = inner_json.get("reply", "")
-      # 如果内层解析出了更好的 parsedData (如 urn:error)，覆盖它
-      if inner_json.get("parsedData"):
-        parsed_data = inner_json.get("parsedData")
-
-  # ---------------------------------------------------------
-  # 🌟 步骤 2：【第二优先级】如果 LLM 没提供 parsedData，再去拿 ToolMessage
-  # ---------------------------------------------------------
-  if not parsed_data:
-    for msg in reversed(messages):
-      if (
-          getattr(msg, "type", None) == "user"
-          or msg.__class__.__name__ == "HumanMessage"
-      ):
-        break
-
-      if (
-          getattr(msg, "type", None) == "tool"
-          or msg.__class__.__name__ == "ToolMessage"
-      ):
-        content = getattr(msg, "content", None)
-        if isinstance(content, dict):
-          parsed_data = content
-        elif isinstance(content, str) and content.strip():
-          try:
-            parsed_data = json.loads(content)
-          except Exception:
+    try:
+        # 🌟 统一走 Harness 调用当前 Agent 策略
+        state_result = harness.interact(
+            user_message=req.message,
+            thread_id=session_id,
+            extra_config=extra_config,
+        )
+        print("Harness 原始返回:", state_result)
+        # 1. 统一提取 messages 数据格式
+        if isinstance(state_result, dict):
+            messages = state_result.get("messages", [])
+        elif isinstance(state_result, str):
             try:
-              parsed_data = ast.literal_eval(content)
-            except Exception:
-              pass
-        if parsed_data:
-          break
+                parsed_res = json.loads(state_result)
+                messages = (
+                    parsed_res.get("messages", [state_result])
+                    if isinstance(parsed_res, dict)
+                    else [state_result]
+                )
+            except json.JSONDecodeError:
+                messages = [state_result]
+        else:
+            messages = [str(state_result)]
 
-  # 如果 reply_text 没拿到，兜底为 raw_content
-  if not reply_text:
-    reply_text = (
-        raw_content if isinstance(raw_content, str) else str(raw_content)
-    )
+        # 2. 规范化 message，确保元素兼容对象属性或标准 Dict
+        formatted_messages = []
+        for msg in messages:
+            if isinstance(msg, str):
+                formatted_messages.append({"content": msg, "type": "ai"})
+            else:
+                formatted_messages.append(msg)
 
-  # ---------------------------------------------------------
-  # 🌟 步骤 3：【防御拦截】消除非法卡片 (设备ID为空的情况)
-  # ---------------------------------------------------------
-  if parsed_data and isinstance(parsed_data, dict):
-    # 如果 action 是 sell 且 device_id 为 None，说明大模型在没有指定设备 ID 的情况下盲目发了卡片
-    if (
-        parsed_data.get("action") == "sell"
-        and parsed_data.get("device_id") is None
-    ):
-      # 1. 扔掉这个无意义的 parsedData，防止前端渲染出无法出库的卡片
-      parsed_data = None
-      # 2. 如果提示语不够明确，提示用户补全 ID
-      if "请提供" not in reply_text and "哪一台" not in reply_text:
-        reply_text += " （请补充具体要出售的设备 ID）"
+        # 3. 使用抽取出来的解析逻辑处理返回
+        response_payload = process_shop_agent_response(formatted_messages)
 
-  # ---------------------------------------------------------
-  # 4. 返回给前端
-  # ---------------------------------------------------------
-  return {"reply": reply_text, "parsedData": parsed_data}
+        return response_payload
 
-
-
+    except TimeoutError as te:
+        raise HTTPException(status_code=504, detail=str(te))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Agent 执行失败: {str(e)}")
