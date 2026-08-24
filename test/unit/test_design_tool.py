@@ -6,7 +6,7 @@ import opencc
 import openpyxl
 from openpyxl.styles import Alignment, PatternFill
 
-from core.tools.tools import validate_design_json
+from src.core.pipeline_agent.tools.tools import validate_design_json
 
 # 初始化转换器：繁体转简体
 converter = opencc.OpenCC("t2s")

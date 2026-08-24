@@ -1,7 +1,8 @@
-import time
 import copy
+import time
 from typing import Any
 
+from langchain_core.messages import BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_openai import ChatOpenAI
@@ -71,6 +72,33 @@ class LLMRouter:
             llm=hf_endpoint,
         )
 
+    def get_model(self):
+        """
+        獲取當前優先可用的底層 ChatModel 實例
+        """
+        if self.gemini_available and getattr(settings, "GEMINI_API_KEY", None):
+            return self.gemini
+        if self.openrouter_available and getattr(settings, "OPENROUTER_API_KEY", None):
+            return self.openrouter
+        if self.siliconflow_available and getattr(settings, "SILICONFLOW_API_KEY", None):
+            return self.siliconflow
+        return self.huggingface
+
+    def get_num_tokens_from_messages(self, messages: list[BaseMessage]) -> int:
+        """
+        實現 LangChain 要求的 Token 計算接口
+        """
+        model = self.get_model()
+        if hasattr(model, "get_num_tokens_from_messages"):
+            try:
+                return model.get_num_tokens_from_messages(messages)
+            except Exception:
+                pass
+        
+        # 兜底方案：若模型未實現或調用失敗，按字符數粗略估算
+        total_text = "".join([str(m.content) for m in messages])
+        return len(total_text) // 4
+
     def with_structured_output(
         self,
         schema: type[BaseModel],
@@ -103,7 +131,7 @@ class LLMRouter:
 
     def bind_tools(self, tools):
         """
-        创建一个独立的 Router 副本并绑定工具，解决多 Agent 工具冲突/覆盖问题
+        創建一個獨立的 Router 副本並綁定工具，解決多 Agent 工具衝突/覆蓋問題
         """
         new_router = copy.copy(self)
 

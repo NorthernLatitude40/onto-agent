@@ -10,17 +10,17 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from src.core.llm_router import router
-from src.core.prompts import AGENT_SYSTEM_PROMPT, DESIGNER_SYSTEM_PROMPT, TESTER_SYSTEM_PROMPT
-from src.core.tools.generate_design_doc import (
+from src.core.pipeline_agent.prompts import AGENT_SYSTEM_PROMPT, DESIGNER_SYSTEM_PROMPT, TESTER_SYSTEM_PROMPT
+from src.core.pipeline_agent.tools.generate_design_doc import (
     generate_design_doc,
 )
-from src.core.tools.tools import (
+from src.core.pipeline_agent.tools.tools import (
     generate_excel,
     get_weather,
     search_official_knowledge_base,
     validate_design_json,
 )
-from src.core.workflow import DynamicGraphCompiler
+from src.core.pipeline_agent.workflow import DynamicGraphCompiler
 
 # import atexit
 # atexit.register(self.langfuse.flush)

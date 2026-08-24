@@ -21,7 +21,7 @@ from pathlib import Path
 
 import src.ingestion.parser.python_parser  # noqa: F401 (自動註冊)
 from src.core.llm_router import router
-from src.core.tools.tools import generate_excel, validate_design_json
+from src.core.pipeline_agent.tools.tools import generate_excel, validate_design_json
 from src.ingestion.bridge.design_doc_verifier import cross_check
 from src.ingestion.parser.factory import ParserFactory
 from src.ingestion.schema.screen_item import DesignItem

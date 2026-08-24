@@ -39,6 +39,7 @@ dependencies = [
     "pyjwt>=2.13.0",
     "asyncpg>=0.31.0",
     "openhands-sdk>=1.17.0",
+    "transformers>=5.15.1",
 ]
 
 [dependency-groups]
