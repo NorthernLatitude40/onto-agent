@@ -67,3 +67,85 @@ def delete_dictionary(attr_id: int, db: Session = Depends(get_db)):
     db.delete(target)
     db.commit()
     return {"message": "刪除成功"}
+
+
+from fastapi import FastAPI, HTTPException, Query, Depends
+from pydantic import BaseModel
+from typing import List, Optional
+from sqlalchemy import Column, Integer, String, Boolean, UniqueConstraint
+from sqlalchemy.orm import Session
+
+# Schemas
+class ModelCreate(BaseModel):
+    brand: str = "Apple"
+    model_name: str
+    sort_order: Optional[int] = 0
+
+class ModelResponse(BaseModel):
+    id: int
+    brand: str
+    model_name: str
+    is_active: bool
+    sort_order: int
+
+    class Config:
+        from_attributes = True
+
+# --- API 接口 ---
+
+# 1. 獲取機型列表 (可按品牌過濾)
+@router.get("/device-models", response_model=List[ModelResponse])
+def get_device_models(
+    brand: Optional[str] = Query(None, description="品牌名稱，如 Apple"),
+    db: Session = Depends(get_db)
+):
+    query = db.query(DeviceModel)
+    if brand:
+        query = query.filter(DeviceModel.brand == brand)
+    return query.order_by(DeviceModel.sort_order.asc(), DeviceModel.id.desc()).all()
+
+# 2. 新增機型 (SPU)
+@router.post("/device-models", response_model=ModelResponse)
+def create_device_model(item: ModelCreate, db: Session = Depends(get_db)):
+    exists = db.query(DeviceModel).filter(
+        DeviceModel.brand == item.brand,
+        DeviceModel.model_name == item.model_name
+    ).first()
+    
+    if exists:
+        raise HTTPException(status_code=400, detail="該品牌下已存在此機型名稱")
+
+    new_model = DeviceModel(
+        brand=item.brand,
+        model_name=item.model_name.strip(),
+        sort_order=item.sort_order,
+        is_active=True
+    )
+    db.add(new_model)
+    db.commit()
+    db.refresh(new_model)
+    return new_model
+
+# 3. 刪除或下架機型
+@router.delete("/device-models/{model_id}")
+def delete_device_model(model_id: int, db: Session = Depends(get_db)):
+    target = db.query(DeviceModel).filter(DeviceModel.id == model_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="機型不存在")
+    
+    db.delete(target)
+    db.commit()
+    return {"message": "機型已成功刪除"}
+
+@router.get("/device-models/brands")
+def get_brands(db: Session = Depends(get_db)):
+    # 查詢現有所有品牌，並按字母排序
+    brands = db.query(DeviceModel.brand).distinct().all()
+    brand_list = [b[0] for b in brands if b[0]]
+    
+    # 保證 Apple 始終在第一個，其餘排序
+    if "Apple" in brand_list:
+        brand_list.remove("Apple")
+        brand_list.insert(0, "Apple")
+        
+    return brand_list
