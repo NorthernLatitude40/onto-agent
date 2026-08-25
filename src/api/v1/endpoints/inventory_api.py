@@ -10,7 +10,7 @@ import jwt
 import httpx
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session,  selectinload
 from sqlalchemy import func, case, or_, select, update, desc, asc
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
 from datetime import datetime, date, time as dt_time, timedelta
@@ -1138,44 +1138,59 @@ from pydantic import BaseModel
 from typing import List, Dict
 
 @router.get("/device/options", summary="獲取機型與屬性字典")
-async def get_device_options(db: Session = Depends(get_db)):
-    # 1. 查詢所有已啟用的機型及其屬性
-    models = (
-        db.query(DeviceModel)
-        .filter(DeviceModel.is_active == True)
-        .order_by(DeviceModel.sort_order)
-        .all()
-    )
-    
-    result = []
-    for m in models:
-        result.append({
-            "id": m.id,
-            "model_name": m.model_name,
-            "colors": [a.attr_value for a in m.attributes if a.attr_type == 'color'],
-            "storages": [a.attr_value for a in m.attributes if a.attr_type == 'storage'],
-            "versions": [a.attr_value for a in m.attributes if a.attr_type == 'version'],
-        })
-
-    # 2. 查詢全域通用屬性（model_id 為 None 或 0 的紀錄）
-    global_attrs = (
-        db.query(DeviceModelAttribute)
-        .filter(
-            (DeviceModelAttribute.model_id == None) | (DeviceModelAttribute.model_id == 0)
+async def get_device_options(db: AsyncSession = Depends(get_db_async)):
+    # 1. 預先查詢所有全域通用屬性 (model_id 為 None 或 0)
+    global_stmt = (
+        select(DeviceModelAttribute)
+        .where(
+            or_(
+                DeviceModelAttribute.model_id.is_(None),
+                DeviceModelAttribute.model_id == 0
+            )
         )
-        .order_by(DeviceModelAttribute.sort_order)
-        .all()
+        .order_by(DeviceModelAttribute.sort_order.asc())
     )
+    global_result = await db.scalars(global_stmt)
+    global_attrs = global_result.all()
 
-    # 提取全域字典列表
+    # 提取全域屬性列表
+    global_colors = [a.attr_value for a in global_attrs if a.attr_type == 'color']
+    global_storages = [a.attr_value for a in global_attrs if a.attr_type == 'storage']
+    global_versions = [a.attr_value for a in global_attrs if a.attr_type == 'version']
     networks = [a.attr_value for a in global_attrs if a.attr_type == 'network']
     condition_details = [a.attr_value for a in global_attrs if a.attr_type == 'condition_detail']
     conditions = [a.attr_value for a in global_attrs if a.attr_type == 'condition']
 
-    # 3. 降級備用預設值（如果資料庫還沒有插入全域字典，則使用預設陣列，防止前端拿到空陣列）
+    # 預設保底數據
     default_conditions = ['充新', '99新', '95新', '9新', '85新', '8新', '7新']
     default_networks = ['全網通 5G', '外版無鎖', '外版有鎖(卡貼)', '移動/聯通/電信單網', 'WiFi版']
     default_condition_details = ['全原無拆修', '換過電池', '換過螢幕', '小修/拆修過', '主板大修/擴容', '功能小瑕疵']
+
+    # 2. 查詢所有已啟用的機型及其專屬屬屬性 (使用 selectinload 防止 N+1)
+    models_stmt = (
+        select(DeviceModel)
+        .where(DeviceModel.is_active == True)
+        .options(selectinload(DeviceModel.attributes))
+        .order_by(DeviceModel.sort_order.asc())
+    )
+    models_result = await db.scalars(models_stmt)
+    models = models_result.all()
+
+    result = []
+    for m in models:
+        # 專屬屬性
+        m_colors = [a.attr_value for a in m.attributes if a.attr_type == 'color']
+        m_storages = [a.attr_value for a in m.attributes if a.attr_type == 'storage']
+        m_versions = [a.attr_value for a in m.attributes if a.attr_type == 'version']
+
+        # 優先用機型專屬，若無則降級使用全域通用屬性
+        result.append({
+            "id": m.id,
+            "model_name": m.model_name,
+            "colors": m_colors if m_colors else global_colors,
+            "storages": m_storages if m_storages else global_storages,
+            "versions": m_versions if m_versions else global_versions,
+        })
 
     return {
         "code": 200,

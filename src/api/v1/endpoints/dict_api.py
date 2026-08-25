@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request, Path, FastAPI, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import List, Optional
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, or_
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from sqlalchemy.orm import sessionmaker, Session
 
-from src.common.database import get_db
-from src.model.dict_schema import DictCreate,  DictResponse
+from src.common.database import get_db, get_db_async
+from src.model.dict_schema import DictCreate,  DictResponse, AttributeItemResponse, AttributeCreate
 from src.model.device_models import DeviceModelAttribute, DeviceModel
 
 
@@ -149,3 +151,126 @@ def get_brands(db: Session = Depends(get_db)):
         brand_list.insert(0, "Apple")
         
     return brand_list
+
+# ==================== 新增機型專屬屬性 ====================
+@router.post(
+    "/device-models/{model_id}/attributes",
+    response_model=AttributeItemResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="為指定機型新增屬性"
+)
+async def create_model_attribute(
+    model_id: int, 
+    payload: AttributeCreate, 
+    db: AsyncSession = Depends(get_db_async)
+):
+    """
+    為指定 model_id 插入一條新的屬性記錄 (如: model_id=2, attr_type='storage', attr_value='1TB')
+    """
+    # 1. 檢查主表機型是否存在 (先 await db.execute，再取 scalar)
+    model_check = await db.execute(
+        select(DeviceModel.id).where(DeviceModel.id == model_id)
+    )
+    if not model_check.scalar():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"機型 ID {model_id} 不存在"
+        )
+
+    # 2. 檢查該機型下是否已存在相同的 attr_type 和 attr_value
+    stmt = select(DeviceModelAttribute).where(
+        DeviceModelAttribute.model_id == model_id,
+        DeviceModelAttribute.attr_type == payload.attr_type,
+        DeviceModelAttribute.attr_value == payload.attr_value
+    )
+    result = await db.execute(stmt)
+    existing_attr = result.scalar_one_or_none()
+
+    if existing_attr:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"機型已存在屬性: {payload.attr_type} = {payload.attr_value}"
+        )
+
+    # 3. 創建並插入數據庫
+    new_attr = DeviceModelAttribute(
+        model_id=model_id,
+        attr_type=payload.attr_type,
+        attr_value=payload.attr_value,
+        sort_order=payload.sort_order if payload.sort_order is not None else 0
+    )
+    
+    db.add(new_attr)
+    await db.commit()
+    await db.refresh(new_attr)  # 刷新獲取數據庫生成的自增 id
+
+    return new_attr
+
+
+# ==================== 獲取機型屬性（含全局通用屬性） ====================
+@router.get(
+    "/device-models/{model_id}/attributes",
+    response_model=List[AttributeItemResponse],
+    summary="獲取指定機型的所有屬性（支持按 attr_type 篩選）"
+)
+async def get_model_attributes(
+    model_id: int,
+    attr_type: Optional[str] = Query(None, description="屬性類型，例如: version, color, storage"),
+    db: AsyncSession = Depends(get_db_async)
+):
+    """
+    查詢指定機型的專有屬性 + 全局通用屬性 (model_id IS NULL)
+    若傳入 attr_type 參數，則只返回該類型的屬性
+    """
+    # 1. 基礎查詢條件：(model_id == 當前機型ID OR model_id IS NULL)
+    stmt = select(DeviceModelAttribute).where(
+        or_(
+            DeviceModelAttribute.model_id == model_id,
+            DeviceModelAttribute.model_id.is_(None)
+        )
+    )
+
+    # 2. 如果前端傳了 attr_type，增加篩選條件
+    if attr_type:
+        stmt = stmt.where(DeviceModelAttribute.attr_type == attr_type)
+
+    # 3. 排序：優先按 attr_type，再按 sort_order 升序
+    stmt = stmt.order_by(
+        DeviceModelAttribute.attr_type.asc(),
+        DeviceModelAttribute.sort_order.asc()
+    )
+
+    # 4. 執行非同步查詢
+    result = await db.scalars(stmt)
+    attributes = result.all()
+
+    return attributes
+
+@router.delete(
+    "/attributes/{attr_id}",
+    status_code=status.HTTP_200_OK,
+    summary="刪除指定 ID 的屬性記錄"
+)
+async def delete_attribute(
+    attr_id: int,
+    db: AsyncSession = Depends(get_db_async)
+):
+    """
+    根據屬性主鍵 ID (id) 刪除該條屬性記錄
+    """
+    # 1. 查詢目標屬性記錄是否存在
+    stmt = select(DeviceModelAttribute).where(DeviceModelAttribute.id == attr_id)
+    result = await db.scalars(stmt)
+    target_attr = result.first()
+
+    if not target_attr:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"未找到 ID 為 {attr_id} 的屬性"
+        )
+
+    # 2. 執行刪除並提交
+    await db.delete(target_attr)
+    await db.commit()
+
+    return {"message": f"屬性 ID {attr_id} 已成功刪除", "id": attr_id}
