@@ -8,6 +8,7 @@ from src.api.v1.endpoints.default_identity_api import router as default_identity
 from src.api.v1.endpoints.partner_api import router as partner_router
 from src.api.v1.endpoints.inventory_api import router as inventory_router
 from src.api.v1.endpoints.purchase_api import router as purchase_router
+from src.api.v1.endpoints.dict_api import router as dict_router
 
 # 2. 創建 V1 版本的 API 總路由
 api_v1_router = APIRouter(prefix="/api/v1")
@@ -47,4 +48,10 @@ api_v1_router.include_router(
     purchase_router,  
     prefix="/purchases",
     tags=["採購管理"]
+)
+
+api_v1_router.include_router(
+    dict_router,  
+    prefix="/dicts",
+    tags=["字典管理"]
 )

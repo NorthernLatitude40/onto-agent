@@ -37,6 +37,7 @@ from src.model.order_model import OutboundOrderModel
 from src.model.order_item_model import OutboundOrderItem
 from src.model.inventory_schema import CreateOutboundOrderPayload
 from src.model.inventory_model import InventoryModel
+from src.model.device_models import DeviceModel, DeviceModelAttribute
 from src.api.auth_api import get_current_user, create_access_token
 from src.common.exceptions import BusinessException
 from src.config.config import settings
@@ -131,6 +132,8 @@ async def confirm_add_device(
             for sn in serials_to_process:
                 new_device = InventoryModel(
                     title=item.model_name,
+                    color=item.color,
+                    storage=item.storage,
                     sn_code=sn if sn else None,
                     purchase_price=item.cost_price,
                     category=item.type,                          # 2 - 二手機
@@ -181,6 +184,175 @@ async def confirm_add_device(
         db.rollback()
         redis_client.delete(lock_key)
         logger.exception("【API 錯誤】設備確認入庫失敗:")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"入庫失敗: {str(e)}"
+        )
+
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from sqlalchemy.orm import Session
+import hashlib
+import uuid
+from datetime import datetime
+
+# ==================== 1. 新的請求 Payload Schema ====================
+class DetailedDeviceItem(BaseModel):
+    model_name: str = Field(..., description="機型名稱")
+    condition: Optional[str] = Field(None, description="成色 (例: 8新, 99新)")
+    color: Optional[str] = Field(None, description="顏色 (例: 午夜色)")
+    storage: Optional[str] = Field(None, description="內存 (例: 256GB)")
+    version: Optional[str] = Field(None, description="版本 (例: 大陸國行)")
+    battery: Optional[str] = Field(None, description="電池健康值 (例: 77%)")
+    system: Optional[str] = Field(None, description="系統版本 (例: iOS 16)")
+    network: Optional[str] = Field(None, description="網絡類型 (例: 全網通)")
+    condition_detail: Optional[str] = Field(None, description="機況說明")
+    imei: Optional[str] = Field(None, description="IMEI 碼")
+    sn_code: Optional[str] = Field(None, description="SN 序列號")
+    is_outof_warranty: bool = Field(True, description="是否已過保")
+    cost_price: float = Field(0.00, description="單台成本價")
+
+class CreateDetailedPurchasePayload(BaseModel):
+    supplier_phone: Optional[str] = Field(None, description="聯繫電話/客戶電話")
+    supplier_name: Optional[str] = Field(None, description="姓名/名稱")
+    partner_id: Optional[int] = Field(None, description="往來單位 ID")
+    total_amount: float = Field(..., description="採購總金額")
+    status: str = Field("pending", description="單據狀態: pending-待驗收, completed-已入庫")
+    items: List[DetailedDeviceItem] = Field(..., description="設備明細列表")
+
+
+# ==================== 2. 新增的後端接口 ====================
+@router.post("/device/add-detailed", summary="確認二手機詳細資訊入庫落庫")
+async def confirm_add_detailed_device(
+    payload: CreateDetailedPurchasePayload, 
+    db: Session = Depends(get_db),
+    x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id"),
+    current_staff: StaffModel = Depends(get_current_staff)
+):
+    """
+    對應新版前端原型的入庫接口：
+    1. 自動補全或創建往來單位 (Partner)
+    2. 寫入 inventory 表（支援成色、顏色、內存、版本、電池、系統、網絡、機況、IMEI/SN、過保狀態）
+    3. 在 financial_record 表創建一筆對應的採購支出流水 (type=2)
+    """
+    # 1. 檢驗 shop_id
+    if not x_shop_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="缺少必要參數：請求頭中未包含 X-Shop-Id"
+        )
+    
+    # 2. 防重複提交機制 (Redis Lock)
+    raw_str = f"add_detailed_{payload.supplier_phone}_{payload.total_amount}_{x_shop_id}"
+    lock_key = f"lock:device_add_detailed:{hashlib.md5(raw_str.encode()).hexdigest()}"
+
+    is_locked = redis_client.set(lock_key, "locked", ex=5, nx=True)
+    if not is_locked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="請勿重複提交！正在處理中..."
+        )
+
+    try:
+        # 3. 處理 Partner (客戶/供應商) 自動匹配或建立
+        partner_id = payload.partner_id
+        phone = (payload.supplier_phone or "").strip()
+        name = (payload.supplier_name or "").strip()
+
+        if not partner_id and phone:
+            existing_partner = db.query(Partner).filter(
+                Partner.phone == phone, 
+                Partner.shop_id == int(x_shop_id)
+            ).first()
+            
+            if existing_partner:
+                partner_id = existing_partner.id
+            else:
+                default_name = name if name else f"客戶_{phone[-4:] if len(phone) >= 4 else phone}"
+                new_partner = Partner(
+                    name=default_name,
+                    phone=phone,
+                    shop_id=x_shop_id,
+                    type=2,  # 供應商
+                    receivable_amount=0.00,
+                    payable_amount=0.00,
+                    remark="設備入庫時自動創建"
+                )
+                db.add(new_partner)
+                db.flush()
+                partner_id = new_partner.id
+
+        # 4. 判斷單據狀態 (1-待驗收入庫，2-已驗收入庫)
+        inventory_status = 1 if payload.status == "pending" else 2
+        created_devices = []
+
+        # 5. 遍歷 items 批量創建設備詳細庫存記錄
+        for item in payload.items:
+            new_device = InventoryModel(
+                title=item.model_name,
+                sn_code=item.sn_code if item.sn_code else None,
+                imei=item.imei if item.imei else None,             # 結構化寫入 IMEI
+                purchase_price=item.cost_price,
+                category=2,                                       # 2 - 二手機
+                status=inventory_status,                          # 狀態
+                supplier_id=partner_id,                           # 關聯供應商
+                created_by=current_staff.id,                      # 經手人 ID
+                shop_id=x_shop_id,
+                
+                # 規格資訊
+                condition=item.condition,                         # 成色
+                color=item.color,                                 # 顏色
+                storage=item.storage,                             # 內存
+                version=item.version,                             # 版本
+                battery=item.battery,                             # 電池健康
+                system_version=item.system,                       # 系統
+                network=item.network,                             # 網絡
+                condition_detail=item.condition_detail,           # 機況
+                is_outof_warranty=item.is_outof_warranty,         # 是否過保
+                
+                remark=f"來源電話: {payload.supplier_phone}"       # 備註回歸乾淨的業務說明
+            )
+            db.add(new_device)
+            created_devices.append(new_device)
+
+        db.flush()
+
+        # 6. 生成財務支出流水
+        record_sn = f"EXP_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:6].upper()}"
+        financial_record = FinancialRecord(
+            record_sn=record_sn,
+            type=2,                                      # 2-支出
+            category="二手回收",                          # 科目
+            amount=payload.total_amount,                 # 支出總金額
+            profit=0.0,
+            business_type=1,                             # 1-手機設備
+            business_id=created_devices[0].id if created_devices else None,
+            payment_method="微信",
+            remark=f"詳細設備採購入庫 (聯繫電話: {payload.supplier_phone}, 共 {len(created_devices)} 台)",
+            shop_id=x_shop_id
+        )
+        db.add(financial_record)
+
+        # 7. 提交事務
+        db.commit()
+
+        return {
+            "code": 200,
+            "message": "詳細設備單據成功提交並入庫！",
+            "data": {
+                "record_sn": record_sn,
+                "partner_id": partner_id,
+                "total_amount": payload.total_amount,
+                "device_count": len(created_devices),
+                "status": payload.status
+            }
+        }
+
+    except Exception as e:
+        db.rollback()
+        redis_client.delete(lock_key)
+        logger.exception("【API 錯誤】詳細設備確認入庫失敗:")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"入庫失敗: {str(e)}"
@@ -959,3 +1131,58 @@ def refund_outbound_order(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"退貨失敗: {str(e)}"
         )
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from typing import List, Dict
+
+@router.get("/device/options", summary="獲取機型與屬性字典")
+async def get_device_options(db: Session = Depends(get_db)):
+    # 1. 查詢所有已啟用的機型及其屬性
+    models = (
+        db.query(DeviceModel)
+        .filter(DeviceModel.is_active == True)
+        .order_by(DeviceModel.sort_order)
+        .all()
+    )
+    
+    result = []
+    for m in models:
+        result.append({
+            "id": m.id,
+            "model_name": m.model_name,
+            "colors": [a.attr_value for a in m.attributes if a.attr_type == 'color'],
+            "storages": [a.attr_value for a in m.attributes if a.attr_type == 'storage'],
+            "versions": [a.attr_value for a in m.attributes if a.attr_type == 'version'],
+        })
+
+    # 2. 查詢全域通用屬性（model_id 為 None 或 0 的紀錄）
+    global_attrs = (
+        db.query(DeviceModelAttribute)
+        .filter(
+            (DeviceModelAttribute.model_id == None) | (DeviceModelAttribute.model_id == 0)
+        )
+        .order_by(DeviceModelAttribute.sort_order)
+        .all()
+    )
+
+    # 提取全域字典列表
+    networks = [a.attr_value for a in global_attrs if a.attr_type == 'network']
+    condition_details = [a.attr_value for a in global_attrs if a.attr_type == 'condition_detail']
+    conditions = [a.attr_value for a in global_attrs if a.attr_type == 'condition']
+
+    # 3. 降級備用預設值（如果資料庫還沒有插入全域字典，則使用預設陣列，防止前端拿到空陣列）
+    default_conditions = ['充新', '99新', '95新', '9新', '85新', '8新', '7新']
+    default_networks = ['全網通 5G', '外版無鎖', '外版有鎖(卡貼)', '移動/聯通/電信單網', 'WiFi版']
+    default_condition_details = ['全原無拆修', '換過電池', '換過螢幕', '小修/拆修過', '主板大修/擴容', '功能小瑕疵']
+
+    return {
+        "code": 200,
+        "data": {
+            "models": result,
+            "conditions": conditions if conditions else default_conditions,
+            "networks": networks if networks else default_networks,
+            "condition_details": condition_details if condition_details else default_condition_details
+        }
+    }
