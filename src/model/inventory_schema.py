@@ -78,6 +78,8 @@ class PurchaseOrderItemPayload(BaseModel):
     model_name: str = Field(..., description="設備機型名稱，如：iPhone 15 Pro")
     serials: List[str] = Field(default_factory=list, description="串號/IMEI/SN列表")
     cost_price: float = Field(0.0, description="進貨/回收單價")
+    color: Optional[str] = Field(None, description="顏色 (例: 午夜色)")
+    storage: Optional[str] = Field(None, description="內存 (例: 256GB)")
     notes: str = Field(None, description="備注")
 
 
