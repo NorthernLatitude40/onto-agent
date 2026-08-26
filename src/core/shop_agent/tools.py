@@ -3,26 +3,21 @@ import time
 import uuid
 import traceback
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Optional, List, Annotated
 
 from sqlalchemy import create_engine, Column, BigInteger, String, Numeric, DateTime, func, or_
-from sqlalchemy.orm import declarative_base, sessionmaker
-from langchain_core.tools import tool
+from langchain_core.tools import tool, InjectedToolArg
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from src.service.inventory_service import InventoryService
 from src.service.financial_service import FinancialService
 from src.common.database import SessionLocal, Base, engine
-from src.model.models import (
-    FinancialRecord
-)
+from src.model.models import FinancialRecord
 from src.model.inventory_model import InventoryModel
 from src.model.order_model import OutboundOrderModel as OutboundOrder
 from src.model.order_item_model import OutboundOrderItem
 from src.model.tools_schema import QueryShopDataInput
-from langchain_core.tools import tool, InjectedToolArg
-from typing import Optional, Annotated
-from langchain_core.runnables import RunnableConfig
 from src.model.rfc_7807_schema import ProblemDetails
 
 logging.basicConfig(level=logging.INFO)
@@ -34,17 +29,16 @@ logger = logging.getLogger(__name__)
 # ==========================================
 
 class AddDeviceInput(BaseModel):
-    supplier_phone: str = Field(description="客戶聯係方式，無說明則填空字串")
-    supplier_name: str = Field(description="客戶名稱，無說明則填空字串")
-    product_type: int = Field(description="1-新機，2-二手手機")
+    supplier_phone: str = Field(default="", description="客戶聯係方式，無說明則填空字串")
+    supplier_name: str = Field(default="", description="客戶名稱，無說明則填空字串")
+    product_type: int = Field(default=2, description="1-新機，2-二手手機")
     model: str = Field(description="手機型號及版本容量，例如：iPhone 13 128G")
     cost_price: float = Field(description="回收/採購成本價格（純數字，單位元），例如：1900")
-    serials: List[str] = Field(default=[], description="設備串號/IMEI/SN碼列表，若無則填空陣列 []")
-    color: str = Field(description="手機顏色，例如：黑色、遠峰藍。若未知則填 '未知'")
-    notes: str = Field(description="設備成色描述，若無說明則填 '無'")
+    serials: List[str] = Field(default_factory=list, description="設備串號/IMEI/SN碼列表，若無則填空陣列 []")
+    color: str = Field(default="未知", description="手機顏色，例如：黑色、遠峰藍。若未知則填 '未知'")
+    notes: str = Field(default="二手回收", description="設備成色描述，若無說明則填 '無'")
 
 
-# 1. 重新设计入参 Schema：区分 device_id 与 model
 class SellDeviceInput(BaseModel):
     # 1. 原有欄位
     device_id: Optional[int] = Field(
@@ -91,21 +85,22 @@ class SellDeviceInput(BaseModel):
 
 # 1. 设备收机/入库解析 Tool
 @tool("add_device", args_schema=AddDeviceInput)
-def add_device(model: str, 
-               cost_price: float, 
-               color: str = "未知", 
-               notes: str = "二手回收", 
-               product_type: int = 2,
-               supplier_phone: str = "",
-               supplier_name: str = "",
-               serials: List[str] | None = None
-               ) -> dict:
+def add_device(
+    model: str, 
+    cost_price: float, 
+    color: str = "未知", 
+    notes: str = "二手回收", 
+    product_type: int = 2,
+    supplier_phone: str = "",
+    supplier_name: str = "",
+    serials: Optional[List[str]] = None
+) -> dict:
     """
     用于识别用户收机/进货/入库设备的意图并提取参数。
     当用户说“收了/买入/进货/录入某台手机”时，必须调用此工具提取参数。
     """
     if serials is None:
-       serials = []
+        serials = []
     return {
         "supplier_phone": supplier_phone,
         "supplier_name": supplier_name,
@@ -126,7 +121,7 @@ def add_device(model: str,
 @tool("sell_device", args_schema=SellDeviceInput)
 def sell_device(
     sell_price: float,
-    model: str,
+    model: Optional[str] = None,
     device_id: Optional[int] = None,
     sn: Optional[str] = None,
     customer_name: Optional[str] = None,
@@ -156,7 +151,7 @@ def sell_device(
         query = db_session.query(InventoryModel).filter(InventoryModel.status == 1)
         device = None
 
-        # 分歧 A: 優先使用 device_id 查詢
+        # 分歧 A: 優先使用 device_id 查詢 (修正：需將重新 filter 的結果賦值回 query)
         if final_device_id:
             device = query.filter(InventoryModel.id == final_device_id).first()
             if not device:
@@ -184,7 +179,7 @@ def sell_device(
         if device:
             final_device_id = device.id
             final_sn = getattr(device, 'sn', final_sn)
-            final_model_name = device.title  # 自動用資料庫中的真實 Title 蓋掉預設 model
+            final_model_name = getattr(device, 'title', final_model_name)  # 自動用資料庫中的真實 Title 蓋掉預設 model
 
     # 🌟 3. 防護降級：若沒傳 db_session 或查不到名稱，保證 model 必有合法字串
     if not final_model_name or final_model_name.isdigit():
@@ -214,12 +209,11 @@ def sell_device(
         "is_pronoun": False,
     }
 
+
 # ==========================================
 # 二、 统一数据查询万能工具 (Fat Query Tool)
 # ==========================================
-# ----------------------------------------------------
-# 2. Tool 函数实现（聚焦分支内精细化拦截与脱敏）
-# ----------------------------------------------------
+
 @tool("query_shop_data", args_schema=QueryShopDataInput)
 def query_shop_data(
     query_type: str, 
@@ -378,10 +372,10 @@ def query_shop_data(
             # 3.C 历史销售 (outbound)
             elif query_type == "outbound":
                 query = db.query(OutboundOrderItem, OutboundOrder, InventoryModel)\
-                 .select_from(OutboundOrderItem)\
-                 .outerjoin(OutboundOrder, OutboundOrderItem.outbound_order_id == OutboundOrder.id)\
-                 .outerjoin(InventoryModel, OutboundOrderItem.inventory_id == InventoryModel.id)\
-                 .filter(OutboundOrder.shop_id == current_shop_id)
+                    .select_from(OutboundOrderItem)\
+                    .outerjoin(OutboundOrder, OutboundOrderItem.outbound_order_id == OutboundOrder.id)\
+                    .outerjoin(InventoryModel, OutboundOrderItem.inventory_id == InventoryModel.id)\
+                    .filter(OutboundOrder.shop_id == current_shop_id)
 
                 if start_time and end_time:
                     query = query.filter(OutboundOrder.created_at.between(start_time, end_time))
@@ -391,16 +385,19 @@ def query_shop_data(
                 records = query.order_by(OutboundOrder.created_at.desc()).all()
 
                 for item in records:
+                    # 解包 tuple 元组 (OutboundOrderItem, OutboundOrder, InventoryModel)
+                    order_item, order, inventory = item[0], item[1], item[2]
+
                     row = {
-                        "id": item.InventoryModel.id if item.InventoryModel else item.OutboundOrderItem.id,
-                        "model": item.InventoryModel.title if item.InventoryModel else "设备已删除/未知型号",
-                        "spec": (item.InventoryModel.spec if item.InventoryModel else None) or "Standard",
-                        "selling_price": float(item.OutboundOrderItem.selling_price or 0), # 售价放行
-                        "time": item.OutboundOrder.created_at.strftime("%Y-%m-%d %H:%M") if (item.OutboundOrder and item.OutboundOrder.created_at) else ""
+                        "id": inventory.id if inventory else (order_item.id if order_item else None),
+                        "model": inventory.title if inventory else "设备已删除/未知型号",
+                        "spec": (inventory.spec if inventory else None) or "Standard",
+                        "selling_price": float(order_item.selling_price or 0) if order_item else 0.0, # 售价放行
+                        "time": order.created_at.strftime("%Y-%m-%d %H:%M") if (order and order.created_at) else ""
                     }
                     # 🌟 [利润脱敏] 仅管理员可看该单的利润 (profit)
                     if is_admin:
-                        row["profit"] = float(item.OutboundOrderItem.profit or 0)
+                        row["profit"] = float(order_item.profit or 0) if order_item else 0.0
                     
                     items_result.append(row)
 
