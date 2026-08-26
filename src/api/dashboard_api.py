@@ -45,6 +45,7 @@ from src.model.inventory_schema import StockListResponse, SellDeviceResponse
 from src.common.dict import StockStatusEnum, PaymentStatusEnum
 # 导入共享的 Harness 实例
 from src.core.harness import harness
+from src.api.auth_api import get_current_staff
 
 logger = logging.getLogger(__name__)
 
@@ -435,6 +436,7 @@ async def shop_chat(
     req: ChatPayload,
     x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id"),
     x_user_role: Optional[str] = Header("staff", alias="X-User-Role"),
+    current_staff: StaffModel = Depends(get_current_staff)
 ):
     if not x_shop_id:
         raise HTTPException(status_code=400, detail="请求头缺少 X-Shop-Id")
@@ -444,6 +446,7 @@ async def shop_chat(
     extra_config = {
         "shop_id": x_shop_id,
         "role": x_user_role,
+        "current_staff": current_staff
     }
 
     try:
