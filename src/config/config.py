@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     SILICONFLOW_API_KEY: str | None = None
     OPENROUTER_API_KEY: str | None = None
     HUGGINGFACEHUB_API_TOKEN: str | None = Field(default=None, alias="HUGGING_FACE_API_KEY")
+    GROQ_API_KEY: str | None = None
 
     # --- Agent & 服务连接地址 ---
     AGENT_SERVER_URL: str | None = None
