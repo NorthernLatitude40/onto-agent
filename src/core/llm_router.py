@@ -42,7 +42,7 @@ class LLMRouter:
         # Siliconflow
         # ----------------------------
         self.siliconflow = ChatOpenAI(
-            model="Qwen/Qwen3.5-7B-Instruct",
+            model="Qwen/Qwen2.5-7B-Instruct",
             openai_api_key=settings.SILICONFLOW_API_KEY,
             base_url="https://api.siliconflow.cn/v1",
             temperature=0,

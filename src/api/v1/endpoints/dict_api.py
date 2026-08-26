@@ -207,11 +207,11 @@ async def create_model_attribute(
     return new_attr
 
 
-# ==================== 獲取機型屬性（含全局通用屬性） ====================
+# ==================== 獲取機型專有屬性 ====================
 @router.get(
     "/device-models/{model_id}/attributes",
     response_model=List[AttributeItemResponse],
-    summary="獲取指定機型的所有屬性（支持按 attr_type 篩選）"
+    summary="獲取指定機型的專有屬性（支持按 attr_type 篩選）"
 )
 async def get_model_attributes(
     model_id: int,
@@ -219,22 +219,19 @@ async def get_model_attributes(
     db: AsyncSession = Depends(get_db_async)
 ):
     """
-    查詢指定機型的專有屬性 + 全局通用屬性 (model_id IS NULL)
-    若傳入 attr_type 參數，則只返回該類型的屬性
+    僅查詢指定機型 (model_id) 的專有屬性，不包含通用屬性。
+    若傳入 attr_type 參數，則只返回該類型的屬性。
     """
-    # 1. 基礎查詢條件：(model_id == 當前機型ID OR model_id IS NULL)
+    # 1. 僅匹配指定機型 ID
     stmt = select(DeviceModelAttribute).where(
-        or_(
-            DeviceModelAttribute.model_id == model_id,
-            DeviceModelAttribute.model_id.is_(None)
-        )
+        DeviceModelAttribute.model_id == model_id
     )
 
     # 2. 如果前端傳了 attr_type，增加篩選條件
     if attr_type:
         stmt = stmt.where(DeviceModelAttribute.attr_type == attr_type)
 
-    # 3. 排序：優先按 attr_type，再按 sort_order 升序
+    # 3. 排序：按 attr_type 及 sort_order 升序
     stmt = stmt.order_by(
         DeviceModelAttribute.attr_type.asc(),
         DeviceModelAttribute.sort_order.asc()
