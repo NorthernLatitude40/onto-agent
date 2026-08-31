@@ -67,7 +67,10 @@ class ShopAgentStrategy(BaseAgentStrategy):
               f"錯誤日誌: {result.get('error_log')}"
           )
       except Exception as e:
-        return f"執行 Voyager 技能演進時發生系統例外錯誤: {str(e)}"
+        import traceback
+        full_trace = traceback.format_exc()
+        print(f"\n================ [VOYAGER ERROR TRACEBACK] ================\n{full_trace}\n===========================================================\n")
+        return f"執行 Voyager 技能演進時發生系統例外錯誤: {str(e)}\n\nTraceback:\n{full_trace}"
 
     return execute_voyager_task
 
