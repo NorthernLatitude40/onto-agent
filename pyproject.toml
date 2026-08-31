@@ -41,6 +41,11 @@ dependencies = [
     "openhands-sdk>=1.17.0",
     "transformers>=5.15.1",
     "langchain-groq>=1.1.3",
+    "supabase>=2.31.0",
+    "vecs>=0.4.5",
+    "langchain-community>=0.4.2",
+    "pygithub>=2.10.0",
+    "pydantic>=2.13.4",
 ]
 
 [dependency-groups]
