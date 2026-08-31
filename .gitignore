@@ -24,3 +24,5 @@ Thumbs.db
 *Zone.Identifier
 
 .override.yml
+
+*.pem
