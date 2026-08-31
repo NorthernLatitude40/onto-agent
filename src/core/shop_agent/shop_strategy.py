@@ -35,9 +35,9 @@ class ShopAgentStrategy(BaseAgentStrategy):
 
     @tool
     async def execute_voyager_task(task_description: str) -> str:
-      """當遇到複雜數據處理、自動化腳本生成、未知業務流程分析或需要自動編程解決的任務時調用此工具。
+      """當用戶要求「編寫/創建新工具」、「新增計算邏輯（如二手估價、折舊計算）」、「自動化數據分析腳本」、複雜數據處理或遇到未知業務邏輯時，【必須】呼叫此工具。
 
-      此工具會在子程序沙盒中自動探索、編寫代碼、驗證並積累技能至資料庫。
+      此工具會在 Subprocess 沙盒中自動探索、生成代碼、進行 pytest 驗證並自動歸檔技能到 Supabase 與 GitHub。
       """
       if not self.skill_library:
         return "錯誤：系統未初始化 Voyager 技能庫。"
