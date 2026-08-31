@@ -2,5 +2,5 @@ def weather_lookup(city: str) -> str:
     fake_data = {"taipei": "28C, sunny", "osaka": "26C, cloudy"}
     key = city.lower()
     if key not in fake_data:
-        raise ValueError(f"no data for {city}")
+        raise ValueError(f"no weather data available for city: {city}")
     return fake_data[key]
