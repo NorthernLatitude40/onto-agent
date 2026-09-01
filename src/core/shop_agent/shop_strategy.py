@@ -24,11 +24,11 @@ class ShopState(TypedDict):
 class ShopAgentStrategy(BaseAgentStrategy):
   """手機店 Agent 策略實現（整合 Voyager 技能演進）"""
 
-  def __init__(self, skill_library: SkillLibrary | None = None):
+  def __init__(self):
     super().__init__()
     self.graph = None
     self.llm = None
-    self.skill_library = skill_library
+    self.skill_library = None
 
   def _create_voyager_tool(self) -> BaseTool:
     """創建驅動自定義沙盒 (Subprocess) + Voyager 探索與技能演進的工具"""
@@ -122,9 +122,12 @@ class ShopAgentStrategy(BaseAgentStrategy):
       self,
       mcp_tools: Sequence[BaseTool],
       checkpointer: BaseCheckpointSaver | None = None,
+      skill_library: SkillLibrary = None,
   ) -> None:
+    self.skill_library = skill_library
     graph_structure_tool = self._create_graph_structure_tool()
     voyager_tool = self._create_voyager_tool()
+    
 
     # 合併本地業務工具、Voyager 工具與 MCP 工具
     local_tools = [
