@@ -14,6 +14,7 @@ from langfuse.langchain import CallbackHandler
 
 from src.core.strategies.base import BaseAgentStrategy
 from src.core.strategies.factory import AgentStrategyFactory
+from src.core.voyager_agent.skill_library import SkillLibrary
 
 logger = logging.getLogger("API_SERVICE")
 
@@ -82,6 +83,22 @@ class AgentHarness:
         self._exit_stack = AsyncExitStack()
         self.client: Client | None = None
         self.mcp_tools: list[BaseTool] = []
+
+        # 👈 2. 初始化並持有 SkillLibrary 實例
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+
+        if supabase_url and supabase_key and gemini_api_key:
+            self.skill_library = SkillLibrary(
+                supabase_url=supabase_url,
+                supabase_key=supabase_key,
+                gemini_api_key=gemini_api_key,
+            )
+            logger.info("✅ [Harness] Voyager SkillLibrary 初始化成功！")
+        else:
+            self.skill_library = None
+            logger.warning("⚠️ [Harness] 缺少 Supabase 或 Gemini 金鑰，SkillLibrary 未初始化。")
         
         # 内部缓存已构建的策略对象，避免重复 Build
         self._strategies: dict[str, BaseAgentStrategy] = {}
@@ -141,7 +158,7 @@ class AgentHarness:
         if strategy_name not in self._strategies:
             logger.info(f"🛠️ [Harness] 正在首次加载并构建 Agent 策略: [{strategy_name}]")
             strategy_obj = AgentStrategyFactory.create(strategy_name)
-            strategy_obj.build(mcp_tools=self.mcp_tools)
+            strategy_obj.build(mcp_tools=self.mcp_tools, skill_library=self.skill_library)
             self._strategies[strategy_name] = strategy_obj
 
         return self._strategies[strategy_name]
