@@ -40,7 +40,7 @@ class LLMRouter:
             model="gemini-2.5-flash",
             api_key=settings.GEMINI_API_KEY,
             temperature=0,
-            max_retries=3,  # 自動處理短暫的 429 限流與重試
+            max_retries=2,  # 自動處理短暫的 429 限流與重試
         )
 
         # ----------------------------
