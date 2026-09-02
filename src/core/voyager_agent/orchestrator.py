@@ -144,7 +144,12 @@ class VoyagerAgentOrchestrator:
           model="gemini-3.5-flash",
           contents=current_prompt,
           config=types.GenerateContentConfig(
-              response_mime_type="application/json"
+            # 配置 AFC 自動調用工具的上限
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=False,
+                maximum_remote_calls=5,  # 👈 預設通常是 10，建議改成 3 ~ 5 避免超時
+            ),
+            response_mime_type="application/json"
           ),
       )
 
