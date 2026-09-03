@@ -20,7 +20,7 @@ class StaffResponse(BaseModel):
     is_active: bool = False
 
     # 兼容 ORM 模型自动转换
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
 # ==========================================

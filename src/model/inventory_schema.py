@@ -25,7 +25,7 @@ class StockItemOut(BaseModel):
     # 🌟 隱藏欄位：從 ORM 讀取入庫時間（不會出現在 JSON 響應中）
     in_stock_time: Optional[datetime] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
     # 🌟 核心：自動將 datetime 欄位序列化為帶 UTC 標記的 ISO 8601 字串

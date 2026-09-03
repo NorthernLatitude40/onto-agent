@@ -26,4 +26,4 @@ class DashboardOverviewResponse(BaseModel):
     today_expense: Optional[float] = 0.0
 
     class Config:
-        orm_mode = True
+       model_config = ConfigDict(from_attributes=True, extra="ignore")

@@ -6,7 +6,7 @@ load_dotenv()
 
 # 1. 導入 Orchestrator 與你的同步函數
 from src.scripts.sync_skills_from_db import SKILLS_DIR, sync_skills
-from src.core.voyager_agent.orchestrator import VoyagerAgentOrchestrator
+from src.github.orchestrator import VoyagerAgentOrchestrator
 
 def run_real_e2e_test():
   print("🚀 開始執行真實端到端 (E2E) 整合測試...")

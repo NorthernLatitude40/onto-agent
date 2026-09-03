@@ -39,7 +39,7 @@ class UserOutSchema(BaseModel):
     role: str
 
     # 允许从 SQLAlchemy ORM 对象直接读取属性填充模型
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
 class TokenOutSchema(BaseModel):
