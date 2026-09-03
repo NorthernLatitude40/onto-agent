@@ -55,7 +55,7 @@ class MappingRule(BaseModel):
     )
 
     # 💡 Pydantic v2 的標準配置寫法
-    model_config = ConfigDict(populate_by_name=True)  # 允許初始化時同時認得別名與原名
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")  # 允許初始化時同時認得別名與原名
 
 
 # 4. 總輸出契約

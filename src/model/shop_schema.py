@@ -43,7 +43,7 @@ class ShopSimpleResponse(BaseModel):
     name: str
     logo: Optional[str] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 # 2. 完整版模型（繼承 ShopSimpleResponse）
 class ShopResponse(ShopSimpleResponse):

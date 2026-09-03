@@ -5,7 +5,7 @@
 '''
 import pytest
 from unittest.mock import MagicMock, patch
-from src.core.voyager_agent.orchestrator import VoyagerAgentOrchestrator
+from src.github.orchestrator import VoyagerAgentOrchestrator
 
 @patch("src.core.voyager_agent.orchestrator.get_file_content")
 @patch("src.core.voyager_agent.orchestrator.submit_code_change")

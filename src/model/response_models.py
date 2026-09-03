@@ -17,14 +17,14 @@ class UserResponse(BaseModel):
     default_staff_id: Optional[int] = None
 
     # 💡 必须配置：允许 Pydantic 直接从 SQLAlchemy ORM 对象读取数据
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 class LoginResponse(BaseModel):
     """微信登录成功返回的标准模型"""
     token: str
     user_info: UserResponse
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 class UserUpdateSchema(BaseModel):
     """更新用户信息请求模型"""
