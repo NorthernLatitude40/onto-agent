@@ -118,7 +118,8 @@ class AgentHarness:
             logger.info(f"🔄 [Harness] 正在建立 FastMCP 连接: {self.mcp_server_url}")
 
             self.client = Client(self.mcp_server_url)
-            await self._exit_stack.enter_async_context(self.client)
+            async with asyncio.timeout(3.0):
+                await self._exit_stack.enter_async_context(self.client)
             logger.info("✨ [Harness] MCP 网络管道打通成功！")
 
             if self.client.session:
@@ -128,9 +129,12 @@ class AgentHarness:
 
             logger.info(f"✅ [Harness] 成功自动转换并装载 {len(self.mcp_tools)} 个 LangChain 工具")
 
-        except Exception as e:
-            logger.error(f"❌ [Harness] MCP 管道建立失败: {e}", exc_info=True)
-            raise RuntimeError(f"Harness 初始化失败，无法连接 MCP 服务器: {e}") from e
+        except (Exception, asyncio.TimeoutError) as e:
+                # 連接失敗或逾時不拋出異常，僅記錄 Warning 並掠過
+                logger.warning(
+                    f"⚠️ MCP 服務器不可用或連接失敗 ({e})，自動跳過 MCP 工具，繼續啟動系統..."
+                )
+                self.client = None  # 將 client 標記為 None，避免後續誤用
 
     def bootstrap(self, timeout: float = 60.0) -> "AgentHarness":
         """启动 Harness 背景线程并同步等待初始化完成"""
