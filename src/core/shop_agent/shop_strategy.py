@@ -3,6 +3,7 @@ import uuid
 import redis
 import traceback
 import modal
+import inspect
 from typing import Any, AsyncGenerator, Dict, List, Sequence
 from typing_extensions import Annotated, TypedDict
 
@@ -45,8 +46,7 @@ class ShopAgentStrategy(BaseAgentStrategy):
 
         skill_tools: List[BaseTool] = []
         try:
-            # ✅ 改為正確從 SkillLibrary 獲取技能列表的方法
-            skills = self.skill_library.get_all_skills()  # 或 self.skill_library.get_skills()
+            skills = self.skill_library.get_all_skills()
             
             for skill in skills:
                 skill_name = skill.get("name")
@@ -56,23 +56,44 @@ class ShopAgentStrategy(BaseAgentStrategy):
                 if not code_str or not skill_name:
                     continue
 
+                # 1. 提供乾淨且基礎的獨立執行環境
                 local_scope = {}
-                exec(code_str, globals(), local_scope)
+                # 傳入獨立字典作為 globals，避免與主程式的 globals 混淆
+                exec_globals = {"__builtins__": __builtins__}
+                
+                try:
+                    exec(code_str, exec_globals, local_scope)
+                except Exception as exec_err:
+                    print(f"⚠️ [Skill Library] 技能 {skill_name} 執行 exec 失敗: {exec_err}")
+                    continue
+
+                # 2. 精準尋找 target func
                 func = local_scope.get(skill_name)
 
                 if not func:
+                    # 嚴格過濾：必須是 function，且不能是 class/type (排除 datetime 等內建型別)
                     for obj in local_scope.values():
-                        if callable(obj) and getattr(obj, "__name__", "") != "<lambda>":
+                        if (
+                            inspect.isfunction(obj)  # 確保是真正的函數，不是 datetime 類別
+                            and getattr(obj, "__name__", "") != "<lambda>"
+                            and obj.__module__ == None # 確保是在 exec 內部定義的函數，而非 import 進來的
+                        ):
                             func = obj
                             break
 
-                if func:
-                    dynamic_tool = StructuredTool.from_function(
-                        func=func,
-                        name=skill_name,
-                        description=description,
-                    )
-                    skill_tools.append(dynamic_tool)
+                if func and callable(func):
+                    try:
+                        # 3. 嘗試標準轉換
+                        dynamic_tool = StructuredTool.from_function(
+                            func=func,
+                            name=skill_name,
+                            description=description,
+                        )
+                        skill_tools.append(dynamic_tool)
+                    except (ValueError, TypeError) as tool_err:
+                        print(f"⚠️ [Skill Library] 技能 {skill_name} 轉 Tool 失敗 (型別解析錯誤): {tool_err}")
+                        # 可在此處選擇加入 Fallback 處理邏輯
+
         except Exception as e:
             print(f"⚠️ [Skill Library] 加載技能工具失敗: {e}")
 
