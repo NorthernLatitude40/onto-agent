@@ -1,6 +1,8 @@
 import json
 import uuid
 import redis
+import traceback
+import modal
 from typing import Any, AsyncGenerator, Dict, List, Sequence
 from typing_extensions import Annotated, TypedDict
 
@@ -77,53 +79,57 @@ class ShopAgentStrategy(BaseAgentStrategy):
         return skill_tools
 
     def _create_voyager_queue_tool(self) -> BaseTool:
-        """創建基於 Redis 隊列的 Voyager 技能演進觸發工具（替代子圖同步調用）"""
+        """創建基於 Modal Serverless 的 Voyager 技能演進觸發工具"""
 
         @tool
         async def execute_voyager_task(task_description: str) -> str:
             """當用戶要求「編寫/創建新工具」、「新增計算邏輯（如二手估價、折舊計算）」或遇到未知業務邏輯時呼叫此工具。
-            此工具會將技能開發任務提交至後台 Redis 隊列，由獨立 Worker 在沙盒中進行代碼編寫、測試與歸檔。
+            此工具會將技能開發任務直接觸發至 Modal Serverless Worker，由雲端容器在沙盒中進行代碼編寫、測試與歸檔。
             """
             try:
                 # 1. 檢索 Supabase 看是否有重複技能
                 data = None
                 if self.skill_library:
-                    # 確保方法調用傳參正確
                     data = self.skill_library.retrieve_skills(task_description)
 
                 if data:
                     matched_skill = data[0]
                     return f"ℹ️ 檢測到已存在相似功能的技能 '{matched_skill['name']}'，無需重複生成。"
-                
+
+                # 2. 生成任務 ID 并初始化 Redis 狀態記錄 (TTL 1小時)
                 task_id = f"voyager_task_{uuid.uuid4().hex[:8]}"
-                payload = {
-                    "task_id": task_id,
-                    "task_description": task_description,
-                }
+                
+                if self.redis:
+                    self.redis.hset(
+                        f"voyager:status:{task_id}",
+                        mapping={"status": "PENDING", "task": task_description},
+                    )
+                    self.redis.expire(f"voyager:status:{task_id}", 3600)
 
-                # 2. 初始化狀態記錄 (TTL 1小時)
-                self.redis.hset(
-                    f"voyager:status:{task_id}",
-                    mapping={"status": "PENDING", "task": task_description},
-                )
-                self.redis.expire(f"voyager:status:{task_id}", 3600)
-
-                # 3. 推入 Redis 隊列
-                self.redis.lpush("voyager:task_queue", json.dumps(payload))
-                print(f"🚀 [ShopAgent] 已將技能開發任務推入 Redis 隊列 (Task ID: {task_id})")
+                # 3. 直接觸發 Modal Serverless 函數（替換原本的 lpush redis 隊列）
+                try:
+                    run_voyager_task = modal.Function.from_name("voyager-worker", "run_voyager_task")
+                    # .spawn() 爲非阻塞的異步觸發，響應毫秒級，不會阻塞 FastAPI/LangGraph 主線程
+                    call_id = run_voyager_task.spawn(task_id, task_description)
+                    print(f"🚀 [ShopAgent] 已成功派發技能開發任務至 Modal Serverless Worker (Task ID: {task_id}, Call ID: {call_id})")
+                except Exception as modal_err:
+                    # 記錄 Modal 觸發失敗日誌
+                    print(f"❌ [ShopAgent] 呼叫 Modal Function 失敗: {modal_err}")
+                    if self.redis:
+                        self.redis.hset(f"voyager:status:{task_id}", "status", "FAILED")
+                    raise modal_err
 
                 return (
-                    f"✅ 新技能生成任務已成功提交至後台處理隊列！\n"
+                    f"✅ 新技能生成任務已成功提交至 Modal Serverless 雲端 Worker 處理！\n"
                     f"【任務 ID】: {task_id}\n"
                     f"【任務描述】: {task_description}\n"
-                    f"Voyager 獨立 Worker 正在沙盒中編寫代碼并進行 pytest 測試。測試通過後技能將自動歸檔，下次請求即可生效。"
+                    f"Modal 雲端容器正在沙盒中編寫代碼并進行 pytest 測試。測試通過後技能將自動歸檔，下次請求即可生效。"
                 )
 
             except Exception as e:
                 # 印出完整堆疊軌跡以便在控制台調試
-                import traceback
                 traceback.print_exc()
-                return f"提交 Voyager 技能演進任務至 Redis 失敗: {str(e)}"
+                return f"提交 Voyager 技能演進任務至 Modal 失敗: {str(e)}"
 
         return execute_voyager_task
 
