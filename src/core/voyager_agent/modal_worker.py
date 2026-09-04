@@ -4,24 +4,21 @@ from pathlib import Path
 
 # 1. 动态获取项目根目录与 src 目录路径
 # 当前文件位于 src/core/voyager_agent/modal_worker.py，向上 3 层定位到 src 目录
+# 定位项目根目录 (含有 pyproject.toml / uv.lock 的目录)
 current_file = Path(__file__).resolve()
-src_dir = current_file.parent.parent.parent
+project_root = current_file.parent.parent.parent.parent  # 向上4层到项目根目录
+src_dir = project_root / "src"
 
 # 2. 定义 Modal App
 app = modal.App("voyager-worker")
 
-# 3. 定义运行镜像（自动安装依赖 + 打包挂载本地 src 代码目录）
+# 使用 Modal 的 pip_install_from_pyproject 或 pip_install_from_requirements
 image = (
     modal.Image.debian_slim()
-    .pip_install(
-        "supabase",
-        "google-generativeai",
-        "redis",
-        "python-dotenv",
-        "langgraph",
-        "pydantic"
-    )
-    # 使用 Modal 新版 API 将本地 src 目录打进云端容器的 /root/src 路径下
+    # 方式 A：如果使用的是 uv 管理的 pyproject.toml，直接解析依赖
+    .pip_install_from_pyproject(project_root / "pyproject.toml")
+    
+    # 挂载本地 src 源码至 Modal 容器
     .add_local_dir(local_path=src_dir, remote_path="/root/src")
 )
 

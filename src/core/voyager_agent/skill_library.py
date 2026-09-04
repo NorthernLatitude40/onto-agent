@@ -117,18 +117,18 @@ class SkillLibrary:
 
         return functions[0]
 
-    def retrieve_skills(
-        self, task_description: str, top_k: int = 3
-    ) -> List[Dict[str, Any]]:
-        """從 Supabase 進行語意檢索，找出最相關的技能"""
-        query_embedding = self._get_embedding(task_description)
+    def retrieve_skills(self, task_description: str, threshold: float = 0.82):
+        # 1. 生成当前 task_description 的 embedding 向量
+        query_vector = self._get_embedding(task_description)
 
+        # 2. 调用 Supabase RPC 函数进行向量余弦相似度比对
         response = self.supabase.rpc(
-            "match_voyager_skills",
+            "match_skills",
             {
-                "query_embedding": query_embedding,
-                "match_count": top_k,
-            },
+                "query_embedding": query_vector,
+                "match_threshold": threshold,  # 高于 0.82 才返回
+                "match_count": 1
+            }
         ).execute()
 
         return response.data
