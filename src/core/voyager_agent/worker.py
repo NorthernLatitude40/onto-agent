@@ -10,7 +10,7 @@ load_dotenv()
 
 from src.core.llm_router import router as base_llm
 from src.core.voyager_agent.skill_library import SkillLibrary
-from core.voyager_agent.voyager_strategy import CustomSandboxVoyagerStrategy
+from src.core.voyager_agent.voyager_strategy import CustomSandboxVoyagerStrategy
 from src.common.redis_client import redis_client
 
 
