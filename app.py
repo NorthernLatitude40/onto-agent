@@ -6,8 +6,6 @@ import traceback
 import aiohttp
 import discord
 import gradio as gr
-from fastapi import FastAPI
-import uvicorn
 
 # 延迟读取 settings
 def get_settings():
@@ -116,14 +114,10 @@ bot_thread = threading.Thread(target=run_bot_in_thread, daemon=True)
 bot_thread.start()
 
 
-# --- 3. FastAPI + Gradio 挂载模式（彻底避免 SSR 崩溃） ---
-app = FastAPI()
-
-with gr.Blocks(title="Discord Bot Host") as demo:
+# --- 3. 暴露给 Hugging Face 托管的 Gradio 变量 ---
+with gr.Blocks(title="Discord Bot Host") as app:
     gr.Markdown("# 🤖 Discord Bot Web Service")
     gr.Markdown("✅ 服务正在稳定运行中...")
 
-app = gr.mount_gradio_app(app, demo, path="/")
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+# 注意：不要写 app.launch() 或 uvicorn.run()！
+# 直接暴露全局变量 app，Hugging Face 会自动监听端口并挂载它。
