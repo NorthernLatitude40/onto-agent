@@ -6,8 +6,10 @@ import traceback
 import aiohttp
 import discord
 import gradio as gr
+from fastapi import FastAPI
+import uvicorn
 
-# 延迟读取 settings，防止配置文件在 import 时抛出异常
+# 延迟读取 settings
 def get_settings():
     try:
         from src.config.config import settings
@@ -99,31 +101,29 @@ def run_bot_in_thread():
         try:
             print("🚀 正在启动 Discord Bot...")
             await client.start(token)
-        except discord.errors.LoginFailure:
-            print("❌ 致命错误：Discord Token 无效！")
-        except discord.errors.PrivilegedIntentsRequired:
-            print("❌ 致命错误：缺少 Privileged Gateway Intent 权限！")
         except Exception as e:
             print(f"❌ Bot 运行发生未知异常: {e}")
             traceback.print_exc()
 
-    # 标准跨线程异步运行方式
-    asyncio.run(start_bot())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(start_bot())
+    except Exception as e:
+        print(f"❌ 事件循环异常结束: {e}")
 
-# 启动后台线程
 bot_thread = threading.Thread(target=run_bot_in_thread, daemon=True)
 bot_thread.start()
 
 
-# --- 3. Gradio 保活界面 ---
+# --- 3. FastAPI + Gradio 挂载模式（彻底避免 SSR 崩溃） ---
+app = FastAPI()
+
 with gr.Blocks(title="Discord Bot Host") as demo:
     gr.Markdown("# 🤖 Discord Bot Web Service")
     gr.Markdown("✅ 服务正在稳定运行中...")
 
+app = gr.mount_gradio_app(app, demo, path="/")
+
 if __name__ == "__main__":
-    # 使用兼容量最高的标准参数启动
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        show_error=True
-    )
+    uvicorn.run(app, host="0.0.0.0", port=7860)
