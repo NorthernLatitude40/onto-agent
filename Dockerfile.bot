@@ -1,0 +1,37 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV TZ=UTC
+
+# 1. 安装基础系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. 从官方 uv 镜像复制 Executable
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# 3. 复制依赖描述文件
+COPY pyproject.toml uv.lock ./
+
+# 4. 使用 uv 直接将依赖安装至系统环境
+RUN uv pip install --system --no-cache -r <(uv export --frozen --no-dev)
+
+# 5. 复制专案所有原始码
+COPY . .
+
+# 6. 设定 PYTHONPATH
+ENV PYTHONPATH=/app
+
+# 7. ⚠️ Hugging Face 必须且只能暴露 7860 端口
+EXPOSE 7860
+
+# 8. 确保 entrypoint_bot.sh 有执行权限
+RUN chmod +x ./entrypoint_bot.sh
+
+# 9. 执行 Bot 专用入口脚本
+CMD ["./entrypoint_bot.sh"]

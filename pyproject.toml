@@ -47,6 +47,7 @@ dependencies = [
     "pygithub>=2.10.0",
     "pydantic>=2.13.4",
     "modal>=1.5.5",
+    "gradio>=6.26.0",
 ]
 
 [dependency-groups]
