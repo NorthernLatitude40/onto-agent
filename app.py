@@ -7,7 +7,7 @@ import aiohttp
 import discord
 import gradio as gr
 
-# 延迟读取 settings，防止配置文件在 import 时抛出同步阻塞异常
+# 延迟读取 settings，防止配置文件在 import 时抛出异常
 def get_settings():
     try:
         from src.config.config import settings
@@ -85,10 +85,7 @@ async def on_message(message):
 
 
 # --- 2. 后台线程启动 Bot ---
-def run_bot_delayed():
-    import time
-    time.sleep(3)
-    
+def run_bot_in_thread():
     settings = get_settings()
     token = getattr(settings, "DISCORD_TOKEN", None) or os.getenv("DISCORD_TOKEN", "")
     
@@ -96,10 +93,7 @@ def run_bot_delayed():
         print("❌ 错误：环境变量 DISCORD_TOKEN 未配置，Bot 无法启动！")
         return
 
-    print(f"🔑 成功读取 Token，准备发起 Discord WebSocket 连接...")
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    print("🔑 成功读取 Token，开始尝试连接 Discord...")
     
     async def start_bot():
         try:
@@ -113,23 +107,23 @@ def run_bot_delayed():
             print(f"❌ Bot 运行发生未知异常: {e}")
             traceback.print_exc()
 
-    loop.run_until_complete(start_bot())
+    # 标准跨线程异步运行方式
+    asyncio.run(start_bot())
 
 # 启动后台线程
-bot_thread = threading.Thread(target=run_bot_delayed, daemon=True)
+bot_thread = threading.Thread(target=run_bot_in_thread, daemon=True)
 bot_thread.start()
 
 
-# --- 3. Gradio 保活界面 (关键点：关闭 SSR) ---
+# --- 3. Gradio 保活界面 ---
 with gr.Blocks(title="Discord Bot Host") as demo:
     gr.Markdown("# 🤖 Discord Bot Web Service")
     gr.Markdown("✅ 服务正在稳定运行中...")
 
 if __name__ == "__main__":
-    # ssr=False 是解决 Node.js 代理崩溃的关键参数
+    # 使用兼容量最高的标准参数启动
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        ssr=False,
         show_error=True
     )
