@@ -34,7 +34,6 @@ class ChatModalQwen(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        # 將 LangChain messages 拼接到 Prompt
         prompt = ""
         for m in messages:
             if isinstance(m, SystemMessage):
@@ -62,7 +61,7 @@ class ChatModalQwen(BaseChatModel):
 
 
 # ===========================================================
-# 2. LLMRouter 整合 Modal 兜底
+# 2. LLMRouter 整合 Modal 兜底與完整 LangChain 介面
 # ===========================================================
 class LLMRouter:
     """
@@ -135,6 +134,9 @@ class LLMRouter:
         )
         self.huggingface = ChatHuggingFace(llm=hf_endpoint)
 
+    # ===========================================================
+    # 消息安全清洗
+    # ===========================================================
     def _sanitize_messages(self, messages: Any) -> List[BaseMessage]:
         if not isinstance(messages, list):
             return messages
@@ -159,6 +161,56 @@ class LLMRouter:
 
         return cleaned_messages
 
+    # ===========================================================
+    # 模型介面與 Tool / Structured Output 支援 (補回缺失方法)
+    # ===========================================================
+    def get_model(self):
+        """獲取當前優先可用的底層 ChatModel 實例"""
+        if self.gemini_available and getattr(settings, "GEMINI_API_KEY", None):
+            return self.gemini
+        if self.groq_available and getattr(settings, "GROQ_API_KEY", None):
+            return self.groq
+        if self.siliconflow_available and getattr(settings, "SILICONFLOW_API_KEY", None):
+            return self.siliconflow
+        if self.openrouter_available and getattr(settings, "OPENROUTER_API_KEY", None):
+            return self.openrouter
+        if self.modal_available:
+            return self.modal_qwen
+        return self.huggingface
+
+    def get_num_tokens_from_messages(self, messages: list[BaseMessage]) -> int:
+        """字符數估算 Token 兜底算法"""
+        total_text = "".join([str(m.content) for m in messages if m and m.content])
+        return max(1, len(total_text) // 2)
+
+    def with_structured_output(self, schema: type[BaseModel]):
+        """為支援的模型開啟 Structured Output"""
+        for provider in ["gemini", "groq", "siliconflow", "openrouter"]:
+            model_inst = getattr(self, provider, None)
+            if model_inst and hasattr(model_inst, "with_structured_output"):
+                try:
+                    setattr(self, provider, model_inst.with_structured_output(schema))
+                except Exception as e:
+                    print(f"⚠️ {provider.capitalize()} 不支援 structured_output: {e}")
+        return self
+
+    def bind_tools(self, tools, **kwargs):
+        """為各模型綁定 Tool，使用深拷貝防止多 Agent 交叉污染"""
+        new_router = copy.copy(self)
+
+        for provider in ["gemini", "groq", "siliconflow", "openrouter"]:
+            model_inst = getattr(self, provider, None)
+            if model_inst and hasattr(model_inst, "bind_tools"):
+                try:
+                    setattr(new_router, provider, model_inst.bind_tools(tools, **kwargs))
+                except Exception:
+                    pass
+
+        return new_router
+
+    # ===========================================================
+    # 同步 & 異步 呼叫 (Invoke & Ainvoke)
+    # ===========================================================
     def invoke(self, messages: Any, config=None, **kwargs):
         safe_messages = self._sanitize_messages(messages)
 
@@ -202,7 +254,7 @@ class LLMRouter:
                 self.openrouter_available = False
                 time.sleep(0.5)
 
-        # 5. Modal Qwen (新增的專屬 GPU 服務兜底)
+        # 5. Modal Qwen
         if self.modal_available:
             try:
                 print("☁️ [Level 5] Modal Private Qwen2.5")
@@ -223,7 +275,6 @@ class LLMRouter:
         raise RuntimeError("所有模型均不可使用或呼叫失敗，請檢查 API Keys 或帳戶額度。")
 
     async def ainvoke(self, messages: Any, config=None, **kwargs):
-        """異步調用路由，當主流 API 失敗時，會降級使用同步包裝的 Modal/HF 服務"""
         safe_messages = self._sanitize_messages(messages)
 
         # 1. Gemini
@@ -262,7 +313,7 @@ class LLMRouter:
                 print(f"❌ OpenRouter Failed: {e}")
                 self.openrouter_available = False
 
-        # 5. Modal Qwen (降級回同步 invoke 執行)
+        # 5. Modal Qwen (降級使用同步包裝)
         if self.modal_available:
             try:
                 print("☁️ [Level 5] Modal Private Qwen2.5 (Async Fallback)")
@@ -288,6 +339,17 @@ class LLMRouter:
         self.siliconflow_available = True
         self.openrouter_available = True
         self.modal_available = True
+
+    @property
+    def status(self):
+        return {
+            "gemini": self.gemini_available,
+            "groq": self.groq_available,
+            "siliconflow": self.siliconflow_available,
+            "openrouter": self.openrouter_available,
+            "modal": self.modal_available,
+            "huggingface": bool(getattr(settings, "HUGGINGFACEHUB_API_TOKEN", None)),
+        }
 
 
 router = LLMRouter()
