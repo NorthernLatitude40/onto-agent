@@ -21,7 +21,7 @@ from src.config.config import settings
 # ===========================================================
 class ChatModalQwen(BaseChatModel):
     endpoint_url: str = Field(...)
-    timeout: float = 30.0
+    timeout: float = 180.0
 
     @property
     def _llm_type(self) -> str:
