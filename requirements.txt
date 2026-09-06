@@ -3,3 +3,4 @@ discord.py>=2.3.0
 aiohttp
 python-dotenv
 litellm
+spaces

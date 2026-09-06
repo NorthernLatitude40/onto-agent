@@ -6,6 +6,7 @@ import traceback
 import aiohttp
 import discord
 import gradio as gr
+import spaces
 
 # 延迟读取 settings
 def get_settings():
@@ -116,7 +117,17 @@ def start_bot_once():
     thread.start()
 
 
-# --- 3. Gradio 状态页面 (满足 Hugging Face 的健康检查协议) ---
+# --- 3. 占位 GPU 函数 ---
+# 本应用完全不需要 GPU（纯 Discord Bot + 状态页），但当前账号被 HF 强制分配了
+# ZeroGPU 硬件，其 `spaces` 库要求启动时至少检测到一个 @spaces.GPU 装饰的函数，
+# 否则直接报 "No @spaces.GPU function detected during startup"。这里放一个
+# 从不会被实际调用的占位函数，仅用于通过这项启动检查。
+@spaces.GPU
+def _zerogpu_placeholder():
+    return "ok"
+
+
+# --- 4. Gradio 状态页面 (满足 Hugging Face 的健康检查协议) ---
 def get_status():
     if client.is_ready():
         return f"🟢 Online: {client.user}"
