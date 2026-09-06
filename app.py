@@ -1,7 +1,8 @@
 import asyncio
 import json
-import threading
 import os
+import threading
+import traceback
 import aiohttp
 import discord
 import gradio as gr
@@ -28,7 +29,7 @@ client = MyBot(intents=intents)
 
 @client.event
 async def on_ready():
-    print(f'Logged in as {client.user}')
+    print(f'✅ Discord Bot 成功登录: {client.user}')
 
 @client.event
 async def on_message(message):
@@ -73,21 +74,23 @@ async def on_message(message):
         await message.channel.send(f"服务请求异常: {str(e)}")
 
 
-# --- 2. 线程启动函数 ---
+# --- 2. 后台线程启动 Discord Bot ---
 def run_bot():
     token = getattr(settings, "DISCORD_TOKEN", None) or os.getenv("DISCORD_TOKEN", "")
     if not token:
-        print("⚠️ 警告: 未找到 DISCORD_TOKEN，Bot 暂未启动！请在 Settings -> Secrets 中设置。")
+        print("❌ 错误：环境变量 DISCORD_TOKEN 未配置，Bot 无法启动！")
         return
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
+        print("🚀 正在启动 Discord Bot...")
         loop.run_until_complete(client.start(token))
     except Exception as e:
-        print(f"Bot 运行错误: {e}")
+        print(f"❌ Bot 运行崩溃: {e}")
+        traceback.print_exc()
 
-# 在后台启动 Discord Bot
+# 启动后台线程
 bot_thread = threading.Thread(target=run_bot, daemon=True)
 bot_thread.start()
 
@@ -95,8 +98,14 @@ bot_thread.start()
 # --- 3. Gradio 保活界面 (供 Hugging Face 检测 7860 端口) ---
 with gr.Blocks(title="Discord Bot Host") as demo:
     gr.Markdown("# 🤖 Discord Bot Web Service")
-    gr.Markdown("服务运行中...")
+    gr.Markdown("✅ 服务正在稳定运行中...")
 
 if __name__ == "__main__":
-    # 关键点：设置 server_name="0.0.0.0" 才能让 HF 容器外探查到 7860 端口
-    demo.launch(server_name="0.0.0.0", server_port=7860, show_error=True)
+    # 关键设置：
+    # 1. server_name="0.0.0.0" 让容器能够监听到外部请求
+    # 2. block=True（默认值）确保主线程挂起，防止程序直接退出导致 Stopping Node.js server
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        show_error=True
+    )
