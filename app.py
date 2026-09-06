@@ -5,9 +5,10 @@ import threading
 import traceback
 import aiohttp
 import discord
-import gradio as gr
+from fastapi import FastAPI
+import uvicorn
 
-# 延迟读取 settings
+# 延迟读取 settings，防止配置模块在 import 时触发同步阻塞
 def get_settings():
     try:
         from src.config.config import settings
@@ -84,8 +85,17 @@ async def on_message(message):
         await message.channel.send(f"服务请求异常: {str(e)}")
 
 
-# --- 2. 后台线程启动 Bot ---
-def run_bot_in_thread():
+# --- 2. 线程安全的单例 Bot 启动器 ---
+bot_started = False
+bot_lock = threading.Lock()
+
+def start_bot_once():
+    global bot_started
+    with bot_lock:
+        if bot_started:
+            return
+        bot_started = True
+
     settings = get_settings()
     token = getattr(settings, "DISCORD_TOKEN", None) or os.getenv("DISCORD_TOKEN", "")
     
@@ -93,31 +103,31 @@ def run_bot_in_thread():
         print("❌ 错误：环境变量 DISCORD_TOKEN 未配置，Bot 无法启动！")
         return
 
-    print("🔑 成功读取 Token，开始尝试连接 Discord...")
+    print("🔑 启动唯一的 Discord Bot 实例...")
     
-    async def start_bot():
+    def run_bot():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            print("🚀 正在启动 Discord Bot...")
-            await client.start(token)
+            loop.run_until_complete(client.start(token))
         except Exception as e:
             print(f"❌ Bot 运行发生未知异常: {e}")
             traceback.print_exc()
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(start_bot())
-    except Exception as e:
-        print(f"❌ 事件循环异常结束: {e}")
-
-bot_thread = threading.Thread(target=run_bot_in_thread, daemon=True)
-bot_thread.start()
+    thread = threading.Thread(target=run_bot, daemon=True)
+    thread.start()
 
 
-# --- 3. 暴露给 Hugging Face 托管的 Gradio 变量 ---
-with gr.Blocks(title="Discord Bot Host") as app:
-    gr.Markdown("# 🤖 Discord Bot Web Service")
-    gr.Markdown("✅ 服务正在稳定运行中...")
+# --- 3. FastAPI Web 服务 (极简心跳，满足 HF 7860 端口探针) ---
+app = FastAPI()
 
-# 注意：不要写 app.launch() 或 uvicorn.run()！
-# 直接暴露全局变量 app，Hugging Face 会自动监听端口并挂载它。
+@app.on_event("startup")
+async def startup_event():
+    start_bot_once()
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Discord Bot is running smoothly!"}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=7860, workers=1)
