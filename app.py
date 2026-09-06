@@ -1,13 +1,11 @@
 import asyncio
-from contextlib import asynccontextmanager
 import json
 import os
 import threading
 import traceback
 import aiohttp
 import discord
-from fastapi import FastAPI
-import uvicorn
+import gradio as gr
 
 # 延迟读取 settings
 def get_settings():
@@ -86,7 +84,7 @@ async def on_message(message):
         await message.channel.send(f"服务请求异常: {str(e)}")
 
 
-# --- 2. 线程安全的 Bot 启动逻辑 ---
+# --- 2. 进程级别的单例防重复启动 ---
 bot_started = False
 bot_lock = threading.Lock()
 
@@ -104,7 +102,7 @@ def start_bot_once():
         print("❌ 错误：环境变量 DISCORD_TOKEN 未配置，Bot 无法启动！")
         return
 
-    print("🔑 启动唯一的 Discord Bot 实例...")
+    print("🔑 正在拉起唯一的 Discord Bot 后台线程...")
     
     def run_bot():
         loop = asyncio.new_event_loop()
@@ -112,27 +110,21 @@ def start_bot_once():
         try:
             loop.run_until_complete(client.start(token))
         except Exception as e:
-            print(f"❌ Bot 运行发生未知异常: {e}")
+            print(f"❌ Bot 运行异常: {e}")
             traceback.print_exc()
 
     thread = threading.Thread(target=run_bot, daemon=True)
     thread.start()
 
+# 模块加载时立即尝试启动 Bot
+start_bot_once()
 
-# --- 3. 采用 FastAPI 标准 Lifespan 保活 ---
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 应用启动时拉起 Bot
-    start_bot_once()
-    yield
-    # 应用关闭时的清理操作
-    print("🛑 FastAPI 应用正在关闭...")
 
-app = FastAPI(lifespan=lifespan)
-
-@app.get("/")
-async def root():
-    return {"status": "ok", "bot": str(client.user) if client.user else "connecting"}
+# --- 3. Gradio 保活界面 ---
+with gr.Blocks(title="Discord Bot Host") as demo:
+    gr.Markdown("# 🤖 Discord Bot Web Service")
+    gr.Markdown("✅ 服务正在稳定运行中...")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=7860, workers=1)
+    # Gradio SDK 模式下最兼容的 launch 写法
+    demo.launch()
