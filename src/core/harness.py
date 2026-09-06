@@ -176,7 +176,7 @@ class AgentHarness:
         timeout: float = 180.0
     ) -> str:
         """同步阻塞交互接口（Facade 模式）"""
-        target_strategy = self._get_or_build_strategy(strategy)
+       
 
         try:
             current_loop = asyncio.get_running_loop()
@@ -197,6 +197,7 @@ class AgentHarness:
         }
 
         async def _call_wrapper():
+            target_strategy = self._get_or_build_strategy(strategy)
             return await target_strategy.ainvoke(inputs, config)
 
         future = asyncio.run_coroutine_threadsafe(_call_wrapper(), self.loop)
@@ -216,7 +217,7 @@ class AgentHarness:
         extra_config: dict[str, Any] | None = None
     ) -> AsyncGenerator[str, None]:
         """专供 FastAPI 调用的异步流式接口"""
-        target_strategy = self._get_or_build_strategy(strategy)
+       
 
         inputs = {"messages": [("user", user_message)]}
         configurable = {"thread_id": thread_id}
@@ -236,6 +237,7 @@ class AgentHarness:
 
         async def producer():
             try:
+                target_strategy = self._get_or_build_strategy(strategy)
                 async for chunk in target_strategy.astream(inputs, config, stream_mode="updates"):
                     payload = _extract_stream_payload(chunk)
                     if payload:
