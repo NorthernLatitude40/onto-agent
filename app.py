@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import os
 import threading
@@ -6,6 +7,7 @@ import traceback
 import aiohttp
 import discord
 import gradio as gr
+from fastapi import FastAPI
 
 # 延迟读取 settings
 def get_settings():
@@ -84,7 +86,7 @@ async def on_message(message):
         await message.channel.send(f"服务请求异常: {str(e)}")
 
 
-# --- 2. 进程级别的单例防重复启动 ---
+# --- 2. 进程级单例启动 Bot ---
 bot_started = False
 bot_lock = threading.Lock()
 
@@ -116,15 +118,18 @@ def start_bot_once():
     thread = threading.Thread(target=run_bot, daemon=True)
     thread.start()
 
-# 模块加载时立即尝试启动 Bot
-start_bot_once()
 
+# --- 3. FastAPI + Gradio 挂载 (彻底绕过 Gradio 6.x SSR 代理) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_bot_once()
+    yield
 
-# --- 3. Gradio 保活界面 ---
+init_app = FastAPI(lifespan=lifespan)
+
 with gr.Blocks(title="Discord Bot Host") as demo:
     gr.Markdown("# 🤖 Discord Bot Web Service")
     gr.Markdown("✅ 服务正在稳定运行中...")
 
-if __name__ == "__main__":
-    # Gradio SDK 模式下最兼容的 launch 写法
-    demo.launch()
+# 关键：将 Gradio 挂载至 FastAPI，并导出全局变量 app 供 Gradio SDK 识别
+app = gr.mount_gradio_app(init_app, demo, path="/")
