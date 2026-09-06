@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+import os
 import aiohttp
 import discord
 import gradio as gr
@@ -35,8 +36,13 @@ async def on_message(message):
         return
 
     try:
+        agent_url = getattr(settings, "AGENT_SERVER_URL", None) or os.getenv("AGENT_SERVER_URL", "")
+        if not agent_url:
+            await message.channel.send("错误：未配置 AGENT_SERVER_URL 环境变量。")
+            return
+
         async with client.session.post(
-            settings.AGENT_SERVER_URL + "/api/v1/chat",
+            agent_url.rstrip("/") + "/api/v1/chat",
             json={"user_id": str(message.author.id), "message": message.content},
             timeout=aiohttp.ClientTimeout(total=60)
         ) as resp:
@@ -69,11 +75,15 @@ async def on_message(message):
 
 # --- 2. 线程启动函数 ---
 def run_bot():
-    # 为子线程创建独立事件循环
+    token = getattr(settings, "DISCORD_TOKEN", None) or os.getenv("DISCORD_TOKEN", "")
+    if not token:
+        print("⚠️ 警告: 未找到 DISCORD_TOKEN，Bot 暂未启动！请在 Settings -> Secrets 中设置。")
+        return
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(client.start(settings.DISCORD_TOKEN))
+        loop.run_until_complete(client.start(token))
     except Exception as e:
         print(f"Bot 运行错误: {e}")
 
@@ -88,5 +98,5 @@ with gr.Blocks(title="Discord Bot Host") as demo:
     gr.Markdown("服务运行中...")
 
 if __name__ == "__main__":
-    # Gradio 默认会自动监听 7860 端口
-    demo.launch()
+    # 关键点：设置 server_name="0.0.0.0" 才能让 HF 容器外探查到 7860 端口
+    demo.launch(server_name="0.0.0.0", server_port=7860, show_error=True)
