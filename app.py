@@ -5,9 +5,9 @@ import threading
 import traceback
 import aiohttp
 import discord
-import gradio as gr
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# 延迟读取 settings，防止配置模块在 import 时触发同步阻塞
+# 延迟读取 settings
 def get_settings():
     try:
         from src.config.config import settings
@@ -84,7 +84,7 @@ async def on_message(message):
         await message.channel.send(f"服务请求异常: {str(e)}")
 
 
-# --- 2. 进程级别的单例防重复启动 ---
+# --- 2. 线程安全的单例 Bot 启动器 ---
 bot_started = False
 bot_lock = threading.Lock()
 
@@ -110,8 +110,7 @@ def start_bot_once():
         try:
             loop.run_until_complete(client.start(token))
         except Exception as e:
-            print(f"❌ Bot 运行异常: {e}")
-            traceback.print_exc()
+            print(f"❌ Bot 运行发生异常: {e}")
 
     thread = threading.Thread(target=run_bot, daemon=True)
     thread.start()
@@ -119,19 +118,21 @@ def start_bot_once():
 start_bot_once()
 
 
-# --- 3. Gradio 保活界面 (加入标准组件激活 SSR 渲染器) ---
-def get_bot_status():
-    if client.is_ready():
-        return f"🟢 在线 ({client.user})"
-    return "🟡 正在连接中..."
+# --- 3. 原生 HTTP 保活服务器 (满足 Hugging Face 7860 健康检查) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html; charset=utf-8")
+        self.end_headers()
+        status_text = f"🟢 Online: {client.user}" if client.is_ready() else "🟡 Connecting..."
+        html = f"<h1>🤖 Discord Bot Service</h1><p>Status: {status_text}</p>"
+        self.wfile.write(html.encode("utf-8"))
 
-with gr.Blocks(title="Discord Bot Host") as demo:
-    gr.Markdown("# 🤖 Discord Bot Web Service")
-    gr.Markdown("✅ 服务正在稳定运行中...")
-    
-    # 关键：添加交互式组件，防止 SSR 代理认为 DOM 为空而崩塌
-    status_box = gr.Textbox(label="Bot 运行状态", value=get_bot_status, every=5)
-    refresh_btn = gr.Button("刷新状态")
-    refresh_btn.click(fn=get_bot_status, outputs=status_box)
+    def log_message(self, format, *args):
+        # 屏蔽心跳日志，保持 控制台 输出干净
+        return
 
-demo.queue()
+if __name__ == "__main__":
+    server = HTTPServer(("0.0.0.0", 7860), HealthCheckHandler)
+    print("🚀 7860 端口心跳服务器已就绪...")
+    server.serve_forever()
