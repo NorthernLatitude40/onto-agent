@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import os
 import threading
@@ -8,7 +9,7 @@ import discord
 from fastapi import FastAPI
 import uvicorn
 
-# 延迟读取 settings，防止配置模块在 import 时触发同步阻塞
+# 延迟读取 settings
 def get_settings():
     try:
         from src.config.config import settings
@@ -85,7 +86,7 @@ async def on_message(message):
         await message.channel.send(f"服务请求异常: {str(e)}")
 
 
-# --- 2. 线程安全的单例 Bot 启动器 ---
+# --- 2. 线程安全的 Bot 启动逻辑 ---
 bot_started = False
 bot_lock = threading.Lock()
 
@@ -118,16 +119,20 @@ def start_bot_once():
     thread.start()
 
 
-# --- 3. FastAPI Web 服务 (极简心跳，满足 HF 7860 端口探针) ---
-app = FastAPI()
-
-@app.on_event("startup")
-async def startup_event():
+# --- 3. 采用 FastAPI 标准 Lifespan 保活 ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 应用启动时拉起 Bot
     start_bot_once()
+    yield
+    # 应用关闭时的清理操作
+    print("🛑 FastAPI 应用正在关闭...")
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Discord Bot is running smoothly!"}
+    return {"status": "ok", "bot": str(client.user) if client.user else "connecting"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=7860, workers=1)
