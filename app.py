@@ -1,5 +1,4 @@
 import asyncio
-from contextlib import asynccontextmanager
 import json
 import os
 import threading
@@ -7,9 +6,8 @@ import traceback
 import aiohttp
 import discord
 import gradio as gr
-from fastapi import FastAPI
 
-# 延迟读取 settings
+# 延迟读取 settings，防止配置模块在 import 时触发同步阻塞
 def get_settings():
     try:
         from src.config.config import settings
@@ -86,7 +84,7 @@ async def on_message(message):
         await message.channel.send(f"服务请求异常: {str(e)}")
 
 
-# --- 2. 进程级单例启动 Bot ---
+# --- 2. 进程级别的单例防重复启动 ---
 bot_started = False
 bot_lock = threading.Lock()
 
@@ -118,18 +116,22 @@ def start_bot_once():
     thread = threading.Thread(target=run_bot, daemon=True)
     thread.start()
 
+start_bot_once()
 
-# --- 3. FastAPI + Gradio 挂载 (彻底绕过 Gradio 6.x SSR 代理) ---
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    start_bot_once()
-    yield
 
-init_app = FastAPI(lifespan=lifespan)
+# --- 3. Gradio 保活界面 (加入标准组件激活 SSR 渲染器) ---
+def get_bot_status():
+    if client.is_ready():
+        return f"🟢 在线 ({client.user})"
+    return "🟡 正在连接中..."
 
 with gr.Blocks(title="Discord Bot Host") as demo:
     gr.Markdown("# 🤖 Discord Bot Web Service")
     gr.Markdown("✅ 服务正在稳定运行中...")
+    
+    # 关键：添加交互式组件，防止 SSR 代理认为 DOM 为空而崩塌
+    status_box = gr.Textbox(label="Bot 运行状态", value=get_bot_status, every=5)
+    refresh_btn = gr.Button("刷新状态")
+    refresh_btn.click(fn=get_bot_status, outputs=status_box)
 
-# 关键：将 Gradio 挂载至 FastAPI，并导出全局变量 app 供 Gradio SDK 识别
-app = gr.mount_gradio_app(init_app, demo, path="/")
+demo.queue()
