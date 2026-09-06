@@ -56,7 +56,7 @@ async def on_message(message):
         async with client.session.post(
             agent_url.rstrip("/") + "/api/v1/chat",
             json={"user_id": str(message.author.id), "message": message.content},
-            timeout=aiohttp.ClientTimeout(total=180)
+            timeout=aiohttp.ClientTimeout(total=60)
         ) as resp:
 
             if resp.status != 200:
@@ -82,8 +82,6 @@ async def on_message(message):
                 await message.channel.send(full_reply[i:i+1900])
 
     except Exception as e:
-        print(f"❌ [on_message] 请求异常: {e}")
-        traceback.print_exc()
         await message.channel.send(f"服务请求异常: {str(e)}")
 
 
