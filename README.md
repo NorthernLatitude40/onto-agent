@@ -1,13 +1,15 @@
 ---
-title: My Discord Bot
+title: MySpace
 emoji: 🤖
 colorFrom: blue
-colorTo: indigo
+colorTo: green
 sdk: gradio
-sdk_version: 5.16.0
 app_file: app.py
+app_port: 7860
 pinned: false
 ---
+
+# Discord Bot Space
 
 <p align="center">
   <img src="assets/logo.png" width="180" alt="OntoAgent Logo">
