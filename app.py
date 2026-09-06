@@ -5,7 +5,7 @@ import threading
 import traceback
 import aiohttp
 import discord
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import gradio as gr
 
 # 延迟读取 settings
 def get_settings():
@@ -116,24 +116,18 @@ def start_bot_once():
     thread.start()
 
 
-# --- 3. 原生 HTTP 保活服务器 (满足 Hugging Face 7860 健康检查) ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/html; charset=utf-8")
-        self.end_headers()
-        status_text = f"🟢 Online: {client.user}" if client.is_ready() else "🟡 Connecting..."
-        html = f"<h1>🤖 Discord Bot Service</h1><p>Status: {status_text}</p>"
-        self.wfile.write(html.encode("utf-8"))
+# --- 3. Gradio 状态页面 (满足 Hugging Face 的健康检查协议) ---
+def get_status():
+    if client.is_ready():
+        return f"🟢 Online: {client.user}"
+    return "🟡 Connecting..."
 
-    def log_message(self, format, *args):
-        # 屏蔽心跳日志，保持控制台输出干净
-        return
+with gr.Blocks(title="Discord Bot Service") as demo:
+    gr.Markdown("## 🤖 Discord Bot Service")
+    status_box = gr.Textbox(label="Status", value=get_status, every=5)
 
 
 if __name__ == "__main__":
-    # bot 启动也收进 __main__，避免被其他模块 import 时被意外触发
     start_bot_once()
-    server = HTTPServer(("0.0.0.0", 7860), HealthCheckHandler)
-    print("🚀 7860 端口心跳服务器已就绪...")
-    server.serve_forever()
+    demo.queue()
+    demo.launch(server_name="0.0.0.0", server_port=7860)
