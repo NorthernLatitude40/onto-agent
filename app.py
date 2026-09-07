@@ -67,11 +67,19 @@ async def on_message(message):
             async for line in resp.content:
                 line_str = line.decode('utf-8').strip()
                 if line_str.startswith("data:"):
-                    content = line_str[5:].strip()
+                    res = line_str[5:].strip()
                     try:
-                        data = json.loads(content)
-                        if "reply" in data:
-                            full_reply = data["reply"]
+                        data = json.loads(res)
+                        if "content" in data:
+                            content = data["content"]
+                            # 安全解析 JSON 並取值
+                            if isinstance(content, str) and content.strip().startswith("{"):
+                                content_res = json.loads(content)
+                                if isinstance(content_res, dict) and "reply" in content_res:
+                                    full_reply = content_res["reply"]  # 注意：原本程式碼中的 data 應更正為 content_res
+                            else:
+                                # 原始內容不是 JSON 格式時的處理
+                                full_reply = content
                     except json.JSONDecodeError:
                         full_reply += content
 

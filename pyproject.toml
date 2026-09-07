@@ -48,6 +48,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "modal>=1.5.5",
     "gradio>=6.26.0",
+    "spaces>=0.51.3",
 ]
 
 [dependency-groups]
