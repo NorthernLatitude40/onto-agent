@@ -1,7 +1,9 @@
 import copy
+import json
 import time
 from typing import Any, List, Optional
 
+import aiohttp
 import requests
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -27,6 +29,21 @@ class ChatModalQwen(BaseChatModel):
     def _llm_type(self) -> str:
         return "modal-qwen-chat"
 
+    def _format_qwen_chatml(self, messages: List[BaseMessage]) -> str:
+        """將 LangChain Messages 格式化為 Qwen2.5 標準 ChatML 模版"""
+        prompt = ""
+        for m in messages:
+            if isinstance(m, SystemMessage):
+                prompt += f"<|im_start|>system\n{m.content}<|im_end|>\n"
+            elif isinstance(m, HumanMessage):
+                prompt += f"<|im_start|>user\n{m.content}<|im_end|>\n"
+            elif isinstance(m, AIMessage):
+                prompt += f"<|im_start|>assistant\n{m.content}<|im_end|>\n"
+            else:
+                prompt += f"<|im_start|>user\n{m.content}<|im_end|>\n"
+        prompt += "<|im_start|>assistant\n"
+        return prompt
+
     def _generate(
         self,
         messages: List[BaseMessage],
@@ -34,30 +51,65 @@ class ChatModalQwen(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        prompt = ""
-        for m in messages:
-            if isinstance(m, SystemMessage):
-                prompt += f"System: {m.content}\n"
-            elif isinstance(m, HumanMessage):
-                prompt += f"User: {m.content}\n"
-            elif isinstance(m, AIMessage):
-                prompt += f"Assistant: {m.content}\n"
-            else:
-                prompt += f"{m.content}\n"
-        prompt += "Assistant: "
+        """同步生成邏輯"""
+        prompt = self._format_qwen_chatml(messages)
+        stop_tokens = ["<|im_end|>", "<|endoftext|>"]
+        if stop:
+            stop_tokens.extend(stop)
 
         response = requests.post(
             self.endpoint_url,
-            json={"prompt": prompt, "max_tokens": kwargs.get("max_tokens", 1024)},
+            json={
+                "prompt": prompt,
+                "max_tokens": kwargs.get("max_tokens", 1024),
+                "stop": stop_tokens,
+            },
             timeout=self.timeout,
         )
         response.raise_for_status()
         data = response.json()
 
-        text = data.get("response", "")
+        text = data.get("response", "").strip()
+        for tag in stop_tokens:
+            if text.endswith(tag):
+                text = text[:-len(tag)].strip()
+
         message = AIMessage(content=text)
-        generation = ChatGeneration(message=message)
-        return ChatResult(generations=[generation])
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """原生非阻塞非同步生成邏輯"""
+        prompt = self._format_qwen_chatml(messages)
+        stop_tokens = ["<|im_end|>", "<|endoftext|>"]
+        if stop:
+            stop_tokens.extend(stop)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.endpoint_url,
+                json={
+                    "prompt": prompt,
+                    "max_tokens": kwargs.get("max_tokens", 1024),
+                    "stop": stop_tokens,
+                },
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+
+        text = data.get("response", "").strip()
+        for tag in stop_tokens:
+            if text.endswith(tag):
+                text = text[:-len(tag)].strip()
+
+        message = AIMessage(content=text)
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
 
 # ===========================================================
@@ -162,7 +214,7 @@ class LLMRouter:
         return cleaned_messages
 
     # ===========================================================
-    # 模型介面與 Tool / Structured Output 支援 (補回缺失方法)
+    # 模型介面與 Tool / Structured Output 支援
     # ===========================================================
     def get_model(self):
         """獲取當前優先可用的底層 ChatModel 實例"""
@@ -185,7 +237,7 @@ class LLMRouter:
 
     def with_structured_output(self, schema: type[BaseModel]):
         """為支援的模型開啟 Structured Output"""
-        for provider in ["gemini", "groq", "siliconflow", "openrouter"]:
+        for provider in ["gemini", "groq", "siliconflow", "openrouter", "modal_qwen", "huggingface"]:
             model_inst = getattr(self, provider, None)
             if model_inst and hasattr(model_inst, "with_structured_output"):
                 try:
@@ -198,7 +250,7 @@ class LLMRouter:
         """為各模型綁定 Tool，使用深拷貝防止多 Agent 交叉污染"""
         new_router = copy.copy(self)
 
-        for provider in ["gemini", "groq", "siliconflow", "openrouter"]:
+        for provider in ["gemini", "groq", "siliconflow", "openrouter", "modal_qwen", "huggingface"]:
             model_inst = getattr(self, provider, None)
             if model_inst and hasattr(model_inst, "bind_tools"):
                 try:
@@ -235,14 +287,14 @@ class LLMRouter:
                 time.sleep(0.5)
 
         # 3. Siliconflow
-        # if self.siliconflow_available and getattr(settings, "SILICONFLOW_API_KEY", None):
-        #     try:
-        #         print("🌊 [Level 3] Siliconflow")
-        #         return self.siliconflow.invoke(safe_messages, config=config, **kwargs)
-        #     except Exception as e:
-        #         print(f"❌ Siliconflow Failed: {e}")
-        #         self.siliconflow_available = False
-        #         time.sleep(0.5)
+        if self.siliconflow_available and getattr(settings, "SILICONFLOW_API_KEY", None):
+            try:
+                print("🌊 [Level 3] Siliconflow")
+                return self.siliconflow.invoke(safe_messages, config=config, **kwargs)
+            except Exception as e:
+                print(f"❌ Siliconflow Failed: {e}")
+                self.siliconflow_available = False
+                time.sleep(0.5)
 
         # 4. OpenRouter
         if self.openrouter_available and getattr(settings, "OPENROUTER_API_KEY", None):
@@ -313,11 +365,11 @@ class LLMRouter:
                 print(f"❌ OpenRouter Failed: {e}")
                 self.openrouter_available = False
 
-        # 5. Modal Qwen (降級使用同步包裝)
+        # 5. Modal Qwen (原生非阻塞 Async)
         if self.modal_available:
             try:
-                print("☁️ [Level 5] Modal Private Qwen2.5 (Async Fallback)")
-                return self.modal_qwen.invoke(safe_messages, config=config, **kwargs)
+                print("☁️ [Level 5] Modal Private Qwen2.5 (Async)")
+                return await self.modal_qwen.ainvoke(safe_messages, config=config, **kwargs)
             except Exception as e:
                 print(f"❌ Modal Qwen Failed: {e}")
                 self.modal_available = False
@@ -325,7 +377,7 @@ class LLMRouter:
         # 6. HuggingFace
         if getattr(settings, "HUGGINGFACEHUB_API_TOKEN", None):
             try:
-                print("🤗 [Level 6] HuggingFace (Async Fallback)")
+                print("🤗 [Level 6] HuggingFace (Async)")
                 return await self.huggingface.ainvoke(safe_messages, config=config, **kwargs)
             except Exception as e:
                 print(f"❌ HuggingFace Failed: {e}")
