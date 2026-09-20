@@ -1,0 +1,76 @@
+{
+  "items": [
+    {
+      "no": 1,
+      "item_name": "繪圖畫布節點狀態管理",
+      "category": "State",
+      "required": "Y",
+      "field_code": "",
+      "format": "",
+      "table": "",
+      "field_name": "",
+      "remarks": "負責儲存與更新畫面上所有節點的位置、屬性與渲染狀態",
+      "is_group": false
+    },
+    {
+      "no": 2,
+      "item_name": "繪圖畫布邊線狀態管理",
+      "category": "State",
+      "required": "Y",
+      "field_code": "",
+      "format": "",
+      "table": "",
+      "field_name": "",
+      "remarks": "負責儲存與更新畫面上所有邊線的位置、屬性與渲染狀態",
+      "is_group": false
+    },
+    {
+      "no": 3,
+      "item_name": "繪圖畫布主區域",
+      "category": "Canvas",
+      "required": "N",
+      "field_code": "",
+      "format": "",
+      "table": "",
+      "field_name": "",
+      "remarks": "顯示所有節點與邊線的繪圖畫布",
+      "is_group": false
+    },
+    {
+      "no": 4,
+      "item_name": "繪圖操作工具列",
+      "category": "Controls",
+      "required": "N",
+      "field_code": "",
+      "format": "",
+      "table": "",
+      "field_name": "",
+      "remarks": "提供放大/縮小/重設等操作功能",
+      "is_group": false
+    },
+    {
+      "no": 5,
+      "item_name": "模型名稱選擇下拉選單",
+      "category": "Select",
+      "required": "N",
+      "field_code": "",
+      "format": "",
+      "table": "",
+      "field_name": "",
+      "remarks": "供使用者選擇不同的模型",
+      "is_group": false
+    },
+    {
+      "no": 6,
+      "item_name": "提示詞 (Prompt) 輸入框",
+      "category": "Input",
+      "required": "N",
+      "field_code": "",
+      "format": "",
+      "table": "",
+      "field_name": "",
+      "remarks": "供使用者輸入提示詞",
+      "is_group": false
+    }
+  ]
+}

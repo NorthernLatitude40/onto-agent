@@ -1,0 +1,64 @@
+{
+  "items": [
+    {
+      "no": 1,
+      "item_name": "Order",
+      "category": "類別 (Class)",
+      "required": "是",
+      "field_code": "CLASS-001",
+      "format": "Class",
+      "table": "Order",
+      "field_name": "id, note",
+      "remarks": "共 2 個方法、2 個屬性",
+      "is_group": true
+    },
+    {
+      "no": 2,
+      "item_name": "id",
+      "category": "屬性 (Field)",
+      "required": "是",
+      "field_code": "ORDER-F001",
+      "format": "int",
+      "table": "Order",
+      "field_name": "id",
+      "remarks": "",
+      "is_group": false
+    },
+    {
+      "no": 3,
+      "item_name": "note",
+      "category": "屬性 (Field)",
+      "required": "是",
+      "field_code": "ORDER-F002",
+      "format": "str",
+      "table": "Order",
+      "field_name": "note",
+      "remarks": "",
+      "is_group": false
+    },
+    {
+      "no": 4,
+      "item_name": "__init__",
+      "category": "方法 (Method)",
+      "required": "是",
+      "field_code": "ORDER-M001",
+      "format": "None",
+      "table": "Order",
+      "field_name": "id, note",
+      "remarks": "參數: id:int, note:str",
+      "is_group": false
+    },
+    {
+      "no": 5,
+      "item_name": "total",
+      "category": "方法 (Method)",
+      "required": "是",
+      "field_code": "ORDER-M002",
+      "format": "int",
+      "table": "Order",
+      "field_name": "items",
+      "remarks": "參數: items:list",
+      "is_group": false
+    }
+  ]
+}
