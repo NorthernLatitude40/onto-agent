@@ -173,7 +173,7 @@ class AgentHarness:
         thread_id: str, 
         strategy: BaseAgentStrategy | str = "shop",
         extra_config: dict[str, Any] | None = None,
-        timeout: float = 180.0
+        timeout: float = 1800.0
     ) -> str:
         """同步阻塞交互接口（Facade 模式）"""
        

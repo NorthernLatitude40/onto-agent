@@ -1,0 +1,145 @@
+# ===== 依赖目录 =====
+node_modules/
+venv/
+.venv/
+env/
+__pycache__/
+*.egg-info/
+.tox/
+site-packages/
+
+# ===== 构建产物 / 打包输出 =====
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+coverage/
+*.min.js
+*.min.css
+
+# ===== 版本控制 / IDE 配置 =====
+.git/
+.svn/
+.vscode/
+.idea/
+*.iml
+
+# ===== 日志 / 临时文件 =====
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.cache
+.cache/
+
+# ===== 环境变量 / 密钥(千万别索引这些)=====
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# ===== 数据库 / 大文件 =====
+*.sqlite3
+*.db
+*.pkl
+*.pt
+*.pth
+*.onnx
+*.h5
+*.parquet
+*.csv
+data/
+datasets/
+
+# ===== 图片 / 媒体 / 二进制资源 =====
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.mp4
+*.mp3
+*.pdf
+*.zip
+*.tar.gz
+
+# ===== 锁文件(通常不需要语义索引)=====
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+poetry.lock
+Pipfile.lock
+
+# ===== 测试覆盖率 / 报告 =====
+htmlcov/
+.pytest_cache/
+.coverage
+*.cover
+
+# ===== 前端特定 =====
+.turbo/
+.vercel/
+storybook-static/
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+pyproject.toml
+
+# ===== 云端 / 容器 / 凭证证书 =====
+*.pfx
+*.p12
+*.crt
+*.csr
+*.cer
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.pem
+*.pub
+.aws/
+.gcloud/
+.azure/
+.docker/
+config.json
+
+# ===== 本地数据库 / 证书 / 服务凭证 =====
+*.kdbx
+*.keychain
+service-account*.json
+firebase-*.json
+gcp-*.json
+credentials.json
+token.json
+tokens.json
+
+# ===== AI 框架 / 本地 Agent 状态与历史记录 =====
+.clinerules
+.cursorrules
+.roo/
+.cline/
+.langchain/
+.langfuse/
+*.chromadb
+*.qdrant
+qdrant_data/
+vector_db/
+
+# ===== 脚本 / 备份 / 临时私钥 =====
+*.bak
+*.swp
+*.swo
+*.old
+*.orig
+*~
+*.sql
+*.dump
+*.tar
+*.gz
+*.7z

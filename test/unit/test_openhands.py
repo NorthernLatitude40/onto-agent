@@ -1,5 +1,3 @@
-import openhands.sdk as sdk
-print(dir(sdk))  # 查看 sdk 模組下開放的類別與工具
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -18,10 +16,7 @@ from openhands.sdk import (
 )
 from openhands.sdk.tool import ToolExecutor, register_tool
 
-from src.config.config import settings
-
-
-# --- 1. 定義 write_file 工具 (Action / Observation / Executor / ToolDefinition) ---
+# --- 1. 定義 write_file 工具 ---
 
 
 class WriteFileAction(Action):
@@ -76,7 +71,9 @@ class WriteFileTool(ToolDefinition[WriteFileAction, WriteFileObservation]):
 
 
 class RunBashAction(Action):
-    command: str = Field(description="要執行的 Terminal 指令 (例如 python fibonacci.py)")
+    command: str = Field(
+        description="要執行的 Terminal 指令 (例如 python fibonacci.py)"
+    )
 
 
 class RunBashObservation(Observation):
@@ -139,20 +136,28 @@ class RunBashTool(ToolDefinition[RunBashAction, RunBashObservation]):
 
 
 def main():
+    # ------------------------------------------------------------------
+    # LLM 設定：使用 openai/ 前綴對齊 LM Studio 相容介面
+    # ------------------------------------------------------------------
     llm = LLM(
         usage_id="agent",
-        model="gemini/gemini-2.5-flash",
-        api_key=settings.GEMINI_API_KEY,
+        model="openai/qwen/qwen2.5-coder-7b",  # 使用 openai/ 前綴
+        base_url="http://192.168.5.25:1234/v1",  # LM Studio Endpoint
+        api_key="lm-studio",
+        timeout=300,  # 提高超時限制至 300 秒，避免 Prefill 階段觸發 408 Timeout
+        max_retries=1,
     )
 
+    # 簡化 Prompt，防止 Prefill 時計算太久
     system_prompt = (
-        "You are an active Autonomous Software Engineer. "
-        "You MUST use the provided tools (`write_file` and `run_bash`) to finish the task. "
-        "First write the code using `write_file`, then run it using `run_bash`. "
-        "If `run_bash` returns an error, fix the code using `write_file` and re-run."
+        "You are an active Autonomous Software Engineer.\n"
+        "You MUST use the provided tools (`write_file` and `run_bash`) to finish the task.\n"
+        "1. First write the Python script using `write_file`.\n"
+        "2. Then run the script using `run_bash`.\n"
+        "3. If `run_bash` returns an error, fix the code using `write_file` and re-run."
     )
 
-    # 註冊自訂工具，再用名稱引用（Agent 初始化時會自動呼叫對應的 .create()）
+    # 註冊自訂工具
     register_tool("write_file", WriteFileTool)
     register_tool("run_bash", RunBashTool)
 
@@ -171,7 +176,7 @@ def main():
         "請撰寫一個 Python 腳本計算斐波那契數列，存為 fibonacci.py，"
         "並使用 run_bash 執行該腳本，確認輸出無錯。"
     )
-    print("🚀 開始執行自進化 Agent 任務...")
+    print("🚀 開始執行自進化 Agent 任務 (LM Studio)...")
 
     conversation.send_message(task)
     conversation.run()

@@ -10,19 +10,20 @@ from src.model.user_model import UserModel
 from src.config.config import settings
 from src.common.dict import  ShopRole
 from src.api.auth_api import get_current_user, create_access_token
-from src.api.auth_api import get_current_user 
+from src.api.auth_api import get_current_user
 from src.model.shop_schema import ShopResponse, CreateShopPayload, UpdateShopPayload, ShopSimpleResponse
 from src.model.shop_model import ShopModel
 from src.common.logger import get_logger
 from src.common.exceptions import BusinessException
 from src.common.i18n import ErrorCode, get_i18n_message
+from src.model.response_models import ApiResponse, CreatedResponse, success_response
 
 logger = get_logger("API_SERVICE")
 
 router = APIRouter()
 
 # ──────── 商家自主开店/创建店铺 API (单表架构重构版) ────────
-@router.post("/create", response_model=ShopResponse, status_code=status.HTTP_201_CREATED, summary="创建店铺")
+@router.post("/create", response_model=ApiResponse, status_code=status.HTTP_201_CREATED, summary="创建店铺")
 def create_shop(
     payload: CreateShopPayload,
     db: Session = Depends(get_db),
@@ -205,7 +206,7 @@ def update_shop_info(
 # ──────── 🌟 获取当前店铺信息 API (单表架构重构版) ────────
 @router.get(
     "/current",
-    response_model=Optional[ShopResponse],  # 允许返回店铺对象或 None (JSON null)
+    response_model=ApiResponse,
     status_code=status.HTTP_200_OK,
     summary="获取当前登录用户关联的店铺信息"
 )
@@ -275,10 +276,11 @@ def get_current_shop_info(
     # 动态将统计出来的员工总数挂载到 shop 对象上（配合 ShopResponse 渲染）
     shop.staff_count = staff_count
 
-    return shop
+    return success_response(data=shop)
 
 @router.get(
-    "/my-shops", 
+    "/my-shops",
+    response_model=ApiResponse,
     summary="获取当前用户关联的店铺列表(含角色、Staff ID及默认店铺标识)"
 )
 def get_my_shops(

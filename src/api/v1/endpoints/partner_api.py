@@ -6,7 +6,9 @@ from typing import Optional
 # 導入你的數據庫 Session 依賴與 SQLAlchemy Partner Model
 from src.common.database import get_db, get_db_async
 from src.model.partner_model import Partner  # 你的 Partner 數據模型
-from src.model.partner_schema import PartnerCreate, PartnerResponse, ApiResponse
+from src.model.partner_schema import PartnerCreate, PartnerResponse
+from src.common.exceptions import not_found, conflict, bad_request
+from src.model.response_models import ApiResponse, CreatedResponse, success_response
 
 router = APIRouter()
 
@@ -22,7 +24,7 @@ async def search_partner_by_phone(
     """
     phone = phone.strip()
     if not phone:
-        return {"code": 200, "data": None}
+        return None
 
     # 執行查詢
     stmt = select(Partner).where(Partner.phone == phone, Partner.shop_id == int(shop_id))
@@ -30,19 +32,21 @@ async def search_partner_by_phone(
     partner = result.scalars().first()
 
     if not partner:
-        return {"code": 200, "message": "未找到相關客戶", "data": None}
+        return None
 
     # 轉為字典或 Pydantic 模型
     partner_data = PartnerResponse.model_validate(partner)
 
-    return {
-        "code": 200,
-        "message": "查詢成功",
-        "data": partner_data
-    }
+    if not partner:
+        return None
+
+    # 轉為字典或 Pydantic 模型
+    partner_data = PartnerResponse.model_validate(partner)
+
+    return success_response(data=partner_data, message="查詢成功")
 
 
-@router.post("", summary="新增/保存往來單位", response_model=ApiResponse)
+@router.post("", summary="新增/保存往來單位", response_model=PartnerResponse)
 async def create_partner(
     partner_in: PartnerCreate,
     shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
@@ -65,11 +69,7 @@ async def create_partner(
                 existing_partner.type = 3
             await db.commit()
             await db.refresh(existing_partner)
-            return {
-                "code": 200,
-                "message": "客戶已存在，已更新信息",
-                "data": PartnerResponse.model_validate(existing_partner)
-            }
+            return CreatedResponse(data=PartnerResponse.model_validate(existing_partner), message="往來單位已存在，資料已更新")
 
     # 創建新單位
     new_partner = Partner(
@@ -86,14 +86,10 @@ async def create_partner(
     await db.commit()
     await db.refresh(new_partner)
 
-    return {
-        "code": 200,
-        "message": "創建成功",
-        "data": PartnerResponse.model_validate(new_partner)
-    }
+    return CreatedResponse(data=PartnerResponse.model_validate(new_partner), message="往來單位創建成功")
 
 
-@router.get("/{partner_id}", summary="獲取往來單位詳情")
+@router.get("/{partner_id}", response_model=ApiResponse, summary="獲取往來單位詳情")
 async def get_partner_detail(
     partner_id: int,
     shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
@@ -104,12 +100,7 @@ async def get_partner_detail(
     partner = result.scalars().first()
 
     if not partner:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="該往來單位不存在"
-        )
+        raise not_found("該往來單位不存在")
 
-    return {
-        "code": 200,
-        "data": PartnerResponse.model_validate(partner)
-    }
+    return success_response(data=PartnerResponse.model_validate(partner), message="查詢成功")
+

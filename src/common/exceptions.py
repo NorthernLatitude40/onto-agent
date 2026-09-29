@@ -1,159 +1,193 @@
-# app/core/exceptions.py
-from typing import Any, Dict, Optional
-from fastapi import FastAPI, Request, status
-from fastapi.exceptions import HTTPException, RequestValidationError
-from fastapi.responses import JSONResponse
-from src.model.rfc_7807_schema import ProblemDetails
+"""
+Custom exceptions with RFC 7807 (Problem Details for HTTP APIs) support.
 
-from src.common.i18n import get_i18n_message
-from src.common.logger import get_logger
+This module provides standardized exception classes that generate RFC 7807 compliant
+error responses. All exceptions include:
+- type: URI reference identifying the problem type
+- title: Human-readable summary
+- status: HTTP status code
+- detail: Human-readable explanation
+- instance: URI of the specific occurrence (optional)
+"""
 
-# ⚙️ 獲取當前模組的 logger
-logger = get_logger("API_SERVICE")
+from fastapi import HTTPException, status
+from typing import Optional
 
 
-# ==============================================================================
-# 1. RFC 7807 業務異常類定義
-# ==============================================================================
-class BusinessException(Exception):
+class ProblemDetails(HTTPException):
+    """
+    Base class for RFC 7807 compliant exceptions.
+    
+    All error responses will follow the Problem Details JSON structure:
+    {
+        "type": "https://api.example.com/errors/{error_type}",
+        "title": "Human-readable title",
+        "status": 400,
+        "detail": "Human-readable explanation",
+        "instance": "/path/to/resource" (optional)
+    }
+    """
+    
     def __init__(
         self,
-        status_code: int = status.HTTP_400_BAD_REQUEST,
-        code: str = "BAD_REQUEST",
-        detail: Optional[str] = None,  # 可選，不傳時會自動查 i18n 字典
-        type_url: str = "about:blank",
-        extra: Optional[Dict[str, Any]] = None,
+        error_type: str,
+        title: str,
+        status_code: int,
+        detail: str,
+        instance: Optional[str] = None,
     ):
+        self.error_type = f"https://api.example.com/errors/{error_type}"
+        self.title = title
         self.status_code = status_code
-        self.code = code
         self.detail = detail
-        self.type_url = type_url
-        self.extra = extra or {}
+        self.instance = instance
+        
+        headers = {"Content-Type": "application/problem+json"}
+        body = {
+            "type": self.error_type,
+            "title": self.title,
+            "status": self.status_code,
+            "detail": self.detail,
+        }
+        if instance:
+            body["instance"] = instance
+            
+        super().__init__(status_code=status_code, detail=body, headers=headers)
 
 
-class PermissionDeniedException(BusinessException):
-    def __init__(self, detail: Optional[str] = None):
+class BadRequestError(ProblemDetails):
+    """400 Bad Request - Invalid input or parameter."""
+    
+    def __init__(self, detail: str, instance: Optional[str] = None):
         super().__init__(
-            status_code=status.HTTP_403_FORBIDDEN,
-            code="PERMISSION_DENIED",
+            error_type="bad-request",
+            title="Bad Request",
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=detail,
+            instance=instance,
         )
 
 
-class UnauthorizedException(BusinessException):
-    def __init__(self, detail: Optional[str] = None):
+class UnauthorizedError(ProblemDetails):
+    """401 Unauthorized - Authentication required."""
+    
+    def __init__(self, detail: str = "Authentication credentials are required.", instance: Optional[str] = None):
         super().__init__(
+            error_type="unauthorized",
+            title="Unauthorized",
             status_code=status.HTTP_401_UNAUTHORIZED,
-            code="UNAUTHORIZED",
             detail=detail,
+            instance=instance,
         )
 
 
-# ==============================================================================
-# 2. 全局異常處理註冊邏輯 (包含動態翻譯與完整的 Log 記錄)
-# ==============================================================================
-def register_exception_handlers(app: FastAPI) -> None:
-
-    # 1. 業務自定義異常（帶國際化與警告/錯誤 Log）
-    @app.exception_handler(BusinessException)
-    async def business_exception_handler(request: Request, exc: BusinessException):
-        # 💡 記錄 Log：5xx 當作 Error，4xx 當作 Warning 並記錄堆棧
-        log_msg = f"[BusinessException] Path: {request.url.path} | Status: {exc.status_code} | Code: {exc.code} | Detail: {exc.detail}"
-        if exc.status_code >= 500:
-            logger.error(log_msg, exc_info=True)
-        else:
-            logger.warning(log_msg, exc_info=True)
-
-        # 💡 從 Header 獲取客戶端語言
-        accept_language = request.headers.get("Accept-Language")
-
-        # 💡 動態翻譯 detail 文本
-        localized_detail = get_i18n_message(
-            code=exc.code,
-            accept_language=accept_language,
-            fallback_detail=exc.detail,
+class ForbiddenError(ProblemDetails):
+    """403 Forbidden - User lacks permission."""
+    
+    def __init__(self, detail: str = "You do not have permission to access this resource.", instance: Optional[str] = None):
+        super().__init__(
+            error_type="forbidden",
+            title="Forbidden",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=detail,
+            instance=instance,
         )
 
-        problem_details = ProblemDetails(
-            type=exc.type_url,
-            title=exc.code,
-            status=exc.status_code,
-            detail=localized_detail,
-            instance=str(request.url.path),
-            **exc.extra,
+
+class NotFoundError(ProblemDetails):
+    """404 Not Found - Resource does not exist."""
+    
+    def __init__(self, resource_type: str, identifier: str, instance: Optional[str] = None):
+        detail = f"{resource_type} with {identifier} does not exist."
+        super().__init__(
+            error_type="not-found",
+            title="Not Found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=detail,
+            instance=instance,
         )
 
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=problem_details.model_dump(exclude_none=True),
-            media_type="application/problem+json",
+
+class ConflictError(ProblemDetails):
+    """409 Conflict - Resource already exists."""
+    
+    def __init__(self, resource_type: str, identifier: str, instance: Optional[str] = None):
+        detail = f"{resource_type} with {identifier} already exists."
+        super().__init__(
+            error_type="conflict",
+            title="Conflict",
+            status_code=status.HTTP_409_CONFLICT,
+            detail=detail,
+            instance=instance,
         )
 
-    # 2. HTTP 顯式異常（如 404、401、403 等框架或顯式拋出的 HTTPException）
-    @app.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException):
-        # 💡 記錄 HTTP 異常堆棧
-        logger.warning(
-            f"[HTTPException] Path: {request.url.path} | Status: {exc.status_code} | Detail: {exc.detail}",
-            exc_info=True,
-        )
 
-        problem_details = ProblemDetails(
-            type="about:blank",
-            title="HTTP_ERROR",
-            status=exc.status_code,
-            detail=str(exc.detail),
-            instance=str(request.url.path),
-        )
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=problem_details.model_dump(exclude_none=True),
-            media_type="application/problem+json",
-        )
-
-    # 3. 請求參數校驗異常（422 Unprocessable Entity）
-    @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(
-        request: Request, exc: RequestValidationError
-    ):
-        # 💡 記錄校驗失敗的詳細參數與堆棧信息
-        logger.warning(
-            f"[RequestValidationError] Path: {request.url.path} | Errors: {exc.errors()}",
-            exc_info=True,
-        )
-
-        problem_details = ProblemDetails(
-            type="about:blank",
-            title="VALIDATION_ERROR",
-            status=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Input validation failed.",
-            instance=str(request.url.path),
-            invalid_params=exc.errors(),
-        )
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            content=problem_details.model_dump(exclude_none=True),
-            media_type="application/problem+json",
-        )
-
-    # 4. 終極兜底異常（未預期的系統崩潰，如 500 代碼 Bug）
-    @app.exception_handler(Exception)
-    async def unhandled_exception_handler(request: Request, exc: Exception):
-        # 💡 使用 logger.error 並加上 exc_info=True 打印完整 Traceback
-        logger.error(
-            f"[UnhandledException] Path: {request.url.path} | Exception: {exc}",
-            exc_info=True,
-        )
-
-        problem_details = ProblemDetails(
-            type="about:blank",
-            title="INTERNAL_SERVER_ERROR",
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected internal error occurred. Please try again later.",
-            instance=str(request.url.path),
-        )
-        return JSONResponse(
+class InternalServerError(ProblemDetails):
+    """500 Internal Server Error - Unexpected server error."""
+    
+    def __init__(self, detail: str = "An unexpected error occurred while processing your request.", instance: Optional[str] = None):
+        super().__init__(
+            error_type="internal-server-error",
+            title="Internal Server Error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=problem_details.model_dump(exclude_none=True),
-            media_type="application/problem+json",
+            detail=detail,
+            instance=instance,
         )
+
+
+class ValidationError(ProblemDetails):
+    """422 Unprocessable Entity - Data validation failed."""
+    
+    def __init__(self, detail: str = "Data validation failed.", instance: Optional[str] = None):
+        super().__init__(
+            error_type="validation-error",
+            title="Unprocessable Entity",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=detail,
+            instance=instance,
+        )
+
+
+class ServiceUnavailableError(ProblemDetails):
+    """503 Service Unavailable - Server temporarily unavailable."""
+    
+    def __init__(self, detail: str = "Service is currently unavailable. Please try again later.", instance: Optional[str] = None):
+        super().__init__(
+            error_type="service-unavailable",
+            title="Service Unavailable",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=detail,
+            instance=instance,
+        )
+
+
+# Convenience functions for common errors
+
+def not_found(resource_type: str, identifier: str, instance: Optional[str] = None):
+    """Create a 404 Not Found error."""
+    return NotFoundError(resource_type, identifier, instance)
+
+
+def bad_request(detail: str, instance: Optional[str] = None):
+    """Create a 400 Bad Request error."""
+    return BadRequestError(detail, instance)
+
+
+def unauthorized(detail: str = "Authentication credentials are required.", instance: Optional[str] = None):
+    """Create a 401 Unauthorized error."""
+    return UnauthorizedError(detail, instance)
+
+
+def forbidden(detail: str = "You do not have permission to access this resource.", instance: Optional[str] = None):
+    """Create a 403 Forbidden error."""
+    return ForbiddenError(detail, instance)
+
+
+def conflict(resource_type: str, identifier: str, instance: Optional[str] = None):
+    """Create a 409 Conflict error."""
+    return ConflictError(resource_type, identifier, instance)
+
+
+def internal_error(detail: str = "An unexpected error occurred while processing your request.", instance: Optional[str] = None):
+    """Create a 500 Internal Server Error."""
+    return InternalServerError(detail, instance)

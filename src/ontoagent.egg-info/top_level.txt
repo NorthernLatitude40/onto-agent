@@ -1,0 +1,15 @@
+api
+common
+config
+core
+dependencies
+github
+ingestion
+main
+mcp_server
+model
+ontology
+scripts
+service
+ui
+webapp

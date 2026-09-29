@@ -113,16 +113,17 @@ class ChatModalQwen(BaseChatModel):
 
 
 # ===========================================================
-# 2. LLMRouter 整合 Modal 兜底與完整 LangChain 介面
+# 2. LLMRouter 整合 LM Studio (本地首選) 與多階 Failover
 # ===========================================================
 class LLMRouter:
     """
     統一管理所有 LLM 輪換與 Failover 機制。
 
-    Gemini -> Groq -> Siliconflow -> OpenRouter -> Modal Qwen -> HuggingFace
+    LM Studio (本地首選) -> Gemini -> Groq -> Siliconflow -> OpenRouter -> Modal Qwen -> HuggingFace
     """
 
     def __init__(self):
+        self.lmstudio_available = True
         self.gemini_available = True
         self.groq_available = True
         self.siliconflow_available = True
@@ -130,61 +131,80 @@ class LLMRouter:
         self.modal_available = True
 
         # ----------------------------
-        # Gemini (主力)
+        # 0. LM Studio (首選本地模型)
+        # ----------------------------
+        lmstudio_base_url = getattr(settings, "LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
+        lmstudio_model = getattr(settings, "LMSTUDIO_MODEL", "local-model")
+        
+        self.lmstudio = ChatOpenAI(
+            model=lmstudio_model,
+            openai_api_key="lm-studio",  # LM Studio 不需要真實 API Key，傳入任意非空字串即可
+            base_url=lmstudio_base_url,
+            temperature=0,
+            timeout=1800,      # 單次 API 請求超時時間降為 30 秒 (可依據模型推導速度調整為 30~60 秒)
+            max_retries=0,  
+        )
+
+        # ----------------------------
+        # 1. Gemini
         # ----------------------------
         self.gemini = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
-            api_key=settings.GEMINI_API_KEY,
+            api_key=getattr(settings, "GEMINI_API_KEY", None),
             temperature=0,
             max_retries=2,
         )
 
         # ----------------------------
-        # Groq
+        # 2. Groq
         # ----------------------------
         self.groq = ChatGroq(
             model="qwen-2.5-32b",
-            groq_api_key=settings.GROQ_API_KEY,
+            groq_api_key=getattr(settings, "GROQ_API_KEY", None),
             temperature=0,
         )
 
         # ----------------------------
-        # Siliconflow
+        # 3. Siliconflow
         # ----------------------------
         self.siliconflow = ChatOpenAI(
             model="Qwen/Qwen2.5-7B-Instruct",
-            openai_api_key=settings.SILICONFLOW_API_KEY,
+            openai_api_key=getattr(settings, "SILICONFLOW_API_KEY", None),
             base_url="https://api.siliconflow.cn/v1",
             temperature=0,
         )
 
         # ----------------------------
-        # OpenRouter
+        # 4. OpenRouter
         # ----------------------------
         self.openrouter = ChatOpenAI(
             model="deepseek/deepseek-r1:free",
-            openai_api_key=settings.OPENROUTER_API_KEY,
+            openai_api_key=getattr(settings, "OPENROUTER_API_KEY", None),
             base_url="https://openrouter.ai/api/v1",
             temperature=0,
         )
 
         # ----------------------------
-        # Modal 自建 Qwen2.5-7B (兜底備用)
+        # 5. Modal 自建 Qwen2.5-7B
         # ----------------------------
         self.modal_qwen = ChatModalQwen(
             endpoint_url="https://bluedreamww--qwen2-5-7b-awq-service-qwenmodel-api.modal.run"
         )
 
         # ----------------------------
-        # HuggingFace (末端備用)
+        # 6. HuggingFace (末端備用)
         # ----------------------------
-        hf_endpoint = HuggingFaceEndpoint(
-            repo_id="meta-llama/Llama-3.1-8B-Instruct",
-            huggingfacehub_api_token=settings.HUGGINGFACEHUB_API_TOKEN,
-            temperature=0.1,
-            task="text-generation",
-        )
-        self.huggingface = ChatHuggingFace(llm=hf_endpoint)
+        hf_token = getattr(settings, "HUGGINGFACEHUB_API_TOKEN", None)
+        if hf_token:
+            hf_endpoint = HuggingFaceEndpoint(
+                repo_id="meta-llama/Llama-3.1-8B-Instruct",
+                huggingfacehub_api_token=hf_token,
+                temperature=0.1,
+                task="text-generation",
+            )
+            self.huggingface = ChatHuggingFace(llm=hf_endpoint)
+        else:
+            self.huggingface = None
 
     # ===========================================================
     # 消息安全清洗
@@ -218,6 +238,8 @@ class LLMRouter:
     # ===========================================================
     def get_model(self):
         """獲取當前優先可用的底層 ChatModel 實例"""
+        if self.lmstudio_available:
+            return self.lmstudio
         if self.gemini_available and getattr(settings, "GEMINI_API_KEY", None):
             return self.gemini
         if self.groq_available and getattr(settings, "GROQ_API_KEY", None):
@@ -237,7 +259,7 @@ class LLMRouter:
 
     def with_structured_output(self, schema: type[BaseModel]):
         """為支援的模型開啟 Structured Output"""
-        for provider in ["gemini", "groq", "siliconflow", "openrouter", "modal_qwen", "huggingface"]:
+        for provider in ["lmstudio", "gemini", "groq", "siliconflow", "openrouter", "modal_qwen", "huggingface"]:
             model_inst = getattr(self, provider, None)
             if model_inst and hasattr(model_inst, "with_structured_output"):
                 try:
@@ -250,7 +272,7 @@ class LLMRouter:
         """為各模型綁定 Tool，使用深拷貝防止多 Agent 交叉污染"""
         new_router = copy.copy(self)
 
-        for provider in ["gemini", "groq", "siliconflow", "openrouter", "modal_qwen", "huggingface"]:
+        for provider in ["lmstudio", "gemini", "groq", "siliconflow", "openrouter", "modal_qwen", "huggingface"]:
             model_inst = getattr(self, provider, None)
             if model_inst and hasattr(model_inst, "bind_tools"):
                 try:
@@ -265,6 +287,16 @@ class LLMRouter:
     # ===========================================================
     def invoke(self, messages: Any, config=None, **kwargs):
         safe_messages = self._sanitize_messages(messages)
+
+        # 0. LM Studio (首選本地模型)
+        if self.lmstudio_available:
+            try:
+                print("🏠 [Level 0] LM Studio (Local)")
+                return self.lmstudio.invoke(safe_messages, config=config, **kwargs)
+            except Exception as e:
+                print(f"❌ LM Studio Failed: {e}")
+                self.lmstudio_available = False
+                time.sleep(0.5)
 
         # 1. Gemini
         if self.gemini_available and getattr(settings, "GEMINI_API_KEY", None):
@@ -317,17 +349,26 @@ class LLMRouter:
                 time.sleep(0.5)
 
         # 6. HuggingFace
-        if getattr(settings, "HUGGINGFACEHUB_API_TOKEN", None):
+        if self.huggingface and getattr(settings, "HUGGINGFACEHUB_API_TOKEN", None):
             try:
                 print("🤗 [Level 6] HuggingFace")
                 return self.huggingface.invoke(safe_messages, config=config, **kwargs)
             except Exception as e:
                 print(f"❌ HuggingFace Failed: {e}")
 
-        raise RuntimeError("所有模型均不可使用或呼叫失敗，請檢查 API Keys 或帳戶額度。")
+        raise RuntimeError("所有模型均不可使用或呼叫失敗，請檢查本地服務或 API Keys 設定。")
 
     async def ainvoke(self, messages: Any, config=None, **kwargs):
         safe_messages = self._sanitize_messages(messages)
+
+        # 0. LM Studio (首選本地模型 Async)
+        if self.lmstudio_available:
+            try:
+                print("🏠 [Level 0] LM Studio (Local Async)")
+                return await self.lmstudio.ainvoke(safe_messages, config=config, **kwargs)
+            except Exception as e:
+                print(f"❌ LM Studio Failed: {e}")
+                self.lmstudio_available = False
 
         # 1. Gemini
         if self.gemini_available and getattr(settings, "GEMINI_API_KEY", None):
@@ -375,17 +416,18 @@ class LLMRouter:
                 self.modal_available = False
 
         # 6. HuggingFace
-        if getattr(settings, "HUGGINGFACEHUB_API_TOKEN", None):
+        if self.huggingface and getattr(settings, "HUGGINGFACEHUB_API_TOKEN", None):
             try:
                 print("🤗 [Level 6] HuggingFace (Async)")
                 return await self.huggingface.ainvoke(safe_messages, config=config, **kwargs)
             except Exception as e:
                 print(f"❌ HuggingFace Failed: {e}")
 
-        raise RuntimeError("所有模型均不可使用或呼叫失敗，請檢查 API Keys 或帳戶額度。")
+        raise RuntimeError("所有模型均不可使用或呼叫失敗，請檢查本地服務或 API Keys 設定。")
 
     def reset(self):
         """恢復所有模型可用狀態"""
+        self.lmstudio_available = True
         self.gemini_available = True
         self.groq_available = True
         self.siliconflow_available = True
@@ -395,6 +437,7 @@ class LLMRouter:
     @property
     def status(self):
         return {
+            "lmstudio": self.lmstudio_available,
             "gemini": self.gemini_available,
             "groq": self.groq_available,
             "siliconflow": self.siliconflow_available,

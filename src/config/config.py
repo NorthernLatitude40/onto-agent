@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = os.getenv("DATABASE_URL")
     DATABASE_URL_ASYNC: str = os.getenv("DATABASE_URL_ASYNC")
 
+    LMSTUDIO_BASE_URL: str = os.getenv("LMSTUDIO_BASE_URL")
+    LMSTUDIO_MODEL: str = os.getenv("LMSTUDIO_MODEL")
 
 
     # --- Pydantic Settings 配置项 ---

@@ -23,9 +23,3 @@ class PartnerResponse(PartnerBase):
 
     class Config:
         from_attributes = True
-
-# 統一 API 響應包裹格式
-class ApiResponse(BaseModel):
-    code: int = 200
-    message: str = "success"
-    data: Optional[dict | list | PartnerResponse] = None
