@@ -9,8 +9,20 @@ from pydantic import BaseModel, Field
 from typing import Generic, TypeVar, Optional, List, Dict, Any
 from datetime import datetime
 
+# Authentication response models
+class LoginResponse(BaseModel):
+    """Login response model."""
+    access_token: str = Field(..., description="JWT access token")
+    token_type: str = Field(..., description="Token type (e.g., Bearer)")
+
+class UserResponse(BaseModel):
+    """User response model."""
+    id: int = Field(..., description="User ID")
+    username: Optional[str] = Field(None, description="Username")
+    email: Optional[str] = Field(None, description="Email address")
+
 # RFC 7807 Problem Details for HTTP APIs
-enum ErrorType(str):
+class ErrorType(str):
     """Standardized error types for RFC 7807 compliance."""
     BAD_REQUEST = "https://api.example.com/errors/bad-request"
     UNAUTHORIZED = "https://api.example.com/errors/unauthorized"
@@ -34,6 +46,8 @@ class ProblemDetails(BaseModel):
         "instance": "/shops/123"
     }
     """
+    model_config = {"arbitrary_types_allowed": True}
+    
     type: ErrorType = Field(..., description="URI reference that identifies the problem type")
     title: str = Field(..., description="Short, human-readable summary of the problem")
     status: int = Field(..., description="HTTP status code")

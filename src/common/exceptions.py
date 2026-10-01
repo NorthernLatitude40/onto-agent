@@ -161,6 +161,31 @@ class ServiceUnavailableError(ProblemDetails):
         )
 
 
+class PermissionDeniedException(ProblemDetails):
+    """403 Forbidden - User lacks specific permission."""
+    
+    def __init__(self, detail: str = "You do not have the required permission to perform this action.", instance: Optional[str] = None):
+        super().__init__(
+            error_type="permission-denied",
+            title="Permission Denied",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=detail,
+            instance=instance,
+        )
+
+
+class BusinessException(ProblemDetails):
+    """400 Bad Request - Generic business logic exception."""
+    
+    def __init__(self, detail: str, instance: Optional[str] = None):
+        super().__init__(
+            error_type="business-error",
+            title="Business Error",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+            instance=instance,
+        )
+
 # Convenience functions for common errors
 
 def not_found(resource_type: str, identifier: str, instance: Optional[str] = None):
@@ -188,6 +213,42 @@ def conflict(resource_type: str, identifier: str, instance: Optional[str] = None
     return ConflictError(resource_type, identifier, instance)
 
 
+def permission_denied(detail: str = "You do not have the required permission to perform this action.", instance: Optional[str] = None):
+    """Create a 403 Permission Denied error."""
+    return PermissionDeniedException(detail, instance)
+
+
 def internal_error(detail: str = "An unexpected error occurred while processing your request.", instance: Optional[str] = None):
     """Create a 500 Internal Server Error."""
     return InternalServerError(detail, instance)
+
+
+def register_exception_handlers(app):
+    """
+    Register global exception handlers for FastAPI application.
+    
+    This function sets up handlers for all custom ProblemDetails exceptions,
+    ensuring they are properly serialized as RFC 7807 compliant responses.
+    
+    Args:
+        app: FastAPI application instance
+    """
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    
+    @app.exception_handler(ProblemDetails)
+    async def problem_details_exception_handler(request: Request, exc: ProblemDetails):
+        return JSONResponse(
+            content={
+                "type": exc.error_type,
+                "title": exc.title,
+                "status": exc.status_code,
+                "detail": exc.detail,
+                "instance": exc.instance if exc.instance else str(request.url),
+            },
+            status_code=exc.status_code,
+        )
+    
+    @app.exception_handler(BusinessException)
+    async def business_exception_handler(request: Request, exc: BusinessException):
+        return await problem_details_exception_handler(request, exc)

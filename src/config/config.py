@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # --- Pydantic Settings 配置项 ---
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=os.path.join(BASE_DIR, ".env"),
         env_file_encoding="utf-8",
         extra="ignore",  # 忽略 .env 中未定义的多余变量
         case_sensitive=True,
