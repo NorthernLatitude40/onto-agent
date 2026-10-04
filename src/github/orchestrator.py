@@ -96,7 +96,7 @@ class VoyagerAgentOrchestrator:
     )
     target_path_str = (
         target_file_path
-        or "未指定，請自行建議路徑（例：src/core/voyager_agent/skills_storage/my_skill.py）"
+        or "未指定，請自行建議路徑（例：./src/core/voyager_agent/skills_storage/my_skill.py）"
     )
     code_str = existing_code if existing_code else "# 新檔案，暫無現有代碼"
     test_str = existing_test if existing_test else "# 新檔案，暫無現有測試"
@@ -172,7 +172,7 @@ class VoyagerAgentOrchestrator:
       rel_tool_path = (
           res_data.get("target_file_path")
           or target_file_path
-          or f"src/core/voyager_agent/skills_storage/{skill_name}.py"
+          or f"./src/core/voyager_agent/skills_storage/{skill_name}.py"
       )
       rel_test_path = (
           res_data.get("test_file_path")

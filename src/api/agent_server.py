@@ -4,6 +4,10 @@ import uvicorn
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+
+# Add the project root to Python path so imports work correctly
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
 from src.common.logger import setup_logging, get_logger
 from fastapi.staticfiles import StaticFiles
 from src.common.exceptions import BusinessException, register_exception_handlers

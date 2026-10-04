@@ -12,6 +12,7 @@ class UserModel(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     openid = Column(String(64), unique=True, nullable=False)
+    email = Column(String(128), unique=True, nullable=True)
     default_shop_id = Column(Integer, nullable=True)
     default_staff_id = Column(Integer, nullable=True)
     

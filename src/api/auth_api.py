@@ -181,8 +181,7 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
     # ---------------------------------------------------------
     if not payload.code or not payload.code.strip():
         raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            code=ErrorCode.WX_CODE_EMPTY
+            detail=f"微信登录码为空"
         )
 
     # ---------------------------------------------------------
@@ -201,10 +200,9 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
             resp = await client.get(wx_url, params=params)
             resp.raise_for_status()
             wx_data = resp.json()
-        except httpx.RequestError:
+        except httpx.RequestError as e:
             raise BusinessException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                code="WX_SERVICE_UNAVAILABLE"
+                detail=f"微信服务连接超时: {str(e)}"
             )
         
     # ---------------------------------------------------------
@@ -212,16 +210,13 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
     # ---------------------------------------------------------
     if wx_data.get("errcode", 0) != 0:
         raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            code=ErrorCode.WX_LOGIN_FAILED,
-            extra={"wx_errmsg": wx_data.get("errmsg")} 
+            detail=f"微信登录失败: {wx_data.get('errmsg', '未知错误')}"
         )
 
     openid = wx_data.get("openid")
     if not openid:
         raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            code=ErrorCode.WX_OPENID_NOT_FOUND
+            detail="微信登录未返回OpenID"
         )
 
     # ---------------------------------------------------------
@@ -256,7 +251,6 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
         except Exception as e:
             db.rollback()
             raise BusinessException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"注册用户失败: {str(e)}"
             )
     else:
@@ -280,7 +274,8 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
     staff_id = staff.id if staff else user.id
 
     return LoginResponse(
-        token=access_token,
+        access_token=access_token,
+        token_type="Bearer",
         user_info=UserResponse(
             id=staff_id,                          # 返回员工档案 ID (或账号 ID)
             nickname=staff_name,                  # 员工姓名
@@ -353,8 +348,6 @@ async def get_my_info(
             )
 
         raise BusinessException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            code="NOT_SHOP_MEMBER",
             detail="您不是该店铺的成员或账号已被停用/未激活",
         )
 
@@ -400,8 +393,6 @@ def update_my_info(
     # 1. 校验是否有传要修改的字段
     if not update_data:
         raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            code="NO_UPDATE_FIELDS_PROVIDED",
             detail="请提供需要更新的字段"
         )
 
@@ -426,8 +417,6 @@ def update_my_info(
         target_default_staff = staff_query.first()
         if not target_default_staff:
             raise BusinessException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                code="INVALID_DEFAULT_SHOP",
                 detail="您不属于该店铺或员工身份无效，无法设为默认"
             )
 
@@ -489,8 +478,6 @@ def update_my_info(
     except Exception as e:
         db.rollback()
         raise BusinessException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            code="UPDATE_USER_FAILED",
             detail=f"更新用户信息失败: {str(e)}"
         )
 

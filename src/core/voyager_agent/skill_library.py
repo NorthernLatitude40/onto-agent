@@ -18,7 +18,7 @@ class SkillLibrary:
         supabase_key: str,
         gemini_api_key: str,
         embedding_model: str = "gemini-embedding-001",
-        skills_dir: Optional[str] = "src/core/voyager_agent/skills_storage",
+        skills_dir: Optional[str] = "./src/core/voyager_agent/skills_storage",
     ):
         self.supabase: Client = create_client(supabase_url, supabase_key)
         self.ai_client = genai.Client(api_key=gemini_api_key)

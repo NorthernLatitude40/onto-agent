@@ -26,3 +26,8 @@ Thumbs.db
 .override.yml
 
 *.pem
+
+*.egg-info/
+
+# Roo AI editor files
+.rooignore

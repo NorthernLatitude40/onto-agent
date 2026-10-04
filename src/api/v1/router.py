@@ -9,6 +9,8 @@ from src.api.v1.endpoints.partner_api import router as partner_router
 from src.api.v1.endpoints.inventory_api import router as inventory_router
 from src.api.v1.endpoints.purchase_api import router as purchase_router
 from src.api.v1.endpoints.dict_api import router as dict_router
+from src.api.v1.endpoints.auth_api import router as auth_router
+from src.api.v1.endpoints.register_api import router as register_router
 
 # 2. 創建 V1 版本的 API 總路由
 api_v1_router = APIRouter(prefix="/api/v1")
@@ -51,7 +53,21 @@ api_v1_router.include_router(
 )
 
 api_v1_router.include_router(
-    dict_router,  
+    dict_router,
     prefix="/dicts",
     tags=["字典管理"]
+)
+
+# 注册认证路由
+api_v1_router.include_router(
+    auth_router,
+    prefix="/auth",
+    tags=["认证管理"]
+)
+
+# 注册用户注册路由
+api_v1_router.include_router(
+    register_router,
+    prefix="",
+    tags=["用户注册"]
 )

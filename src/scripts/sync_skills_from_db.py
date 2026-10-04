@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
-SKILLS_DIR = "src/core/voyager_agent/skills_storage"
+SKILLS_DIR = "./src/core/voyager_agent/skills_storage"
 
 
 def sync_skills():

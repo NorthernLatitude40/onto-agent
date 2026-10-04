@@ -9,19 +9,7 @@ from pydantic import BaseModel, Field
 from typing import Generic, TypeVar, Optional, List, Dict, Any
 from datetime import datetime
 
-# Authentication response models
-class LoginResponse(BaseModel):
-    """Login response model."""
-    access_token: str = Field(..., description="JWT access token")
-    token_type: str = Field(..., description="Token type (e.g., Bearer)")
-
-class UserResponse(BaseModel):
-    """User response model."""
-    id: int = Field(..., description="User ID")
-    username: Optional[str] = Field(None, description="Username")
-    email: Optional[str] = Field(None, description="Email address")
-
-# RFC 7807 Problem Details for HTTP APIs
+# RFC 7807 Error Types - Standardized across all API endpoints
 class ErrorType(str):
     """Standardized error types for RFC 7807 compliance."""
     BAD_REQUEST = "https://api.example.com/errors/bad-request"
@@ -31,7 +19,9 @@ class ErrorType(str):
     CONFLICT = "https://api.example.com/errors/conflict"
     INTERNAL_SERVER_ERROR = "https://api.example.com/errors/internal-server-error"
     VALIDATION_ERROR = "https://api.example.com/errors/validation-error"
-
+    SERVICE_UNAVAILABLE = "https://api.example.com/errors/service-unavailable"
+    PERMISSION_DENIED = "https://api.example.com/errors/permission-denied"
+    BUSINESS_ERROR = "https://api.example.com/errors/business-error"
 
 class ProblemDetails(BaseModel):
     """
@@ -48,11 +38,24 @@ class ProblemDetails(BaseModel):
     """
     model_config = {"arbitrary_types_allowed": True}
     
-    type: ErrorType = Field(..., description="URI reference that identifies the problem type")
+    type: str = Field(..., description="URI reference that identifies the problem type")
     title: str = Field(..., description="Short, human-readable summary of the problem")
     status: int = Field(..., description="HTTP status code")
     detail: str = Field(..., description="Human-readable explanation specific to this occurrence")
-    instance: Optional[str] = Field(None, description="URI reference that identifies specific occurrence")
+    instance: Optional[str] = Field(None, description="URI reference that identifies specific occurrence", exclude=True)
+
+# Authentication response models
+class LoginResponse(BaseModel):
+    """Login response model."""
+    access_token: str = Field(..., description="JWT access token")
+    token_type: str = Field(..., description="Token type (e.g., Bearer)")
+
+class UserResponse(BaseModel):
+    """User response model."""
+    id: int = Field(..., description="User ID")
+    username: Optional[str] = Field(None, description="Username")
+    email: Optional[str] = Field(None, description="Email address")
+
 
 
 # Generic response wrapper for consistent API responses
@@ -249,3 +252,129 @@ def deleted_response(message: str = "Deleted successfully") -> DeletedResponse:
 def empty_response(message: str = "Operation completed successfully") -> EmptyResponse:
     """Create a response with no data payload."""
     return EmptyResponse(code=200, message=message)
+
+# RFC 7807 Error Response Helper Functions
+
+def error_response(
+    status_code: int,
+    detail: str,
+    type_url: str = "https://api.example.com/errors/bad-request",
+    title: Optional[str] = None,
+    instance: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Create a standardized RFC 7807 compliant error response.
+    
+    Args:
+        status_code: HTTP status code (e.g., 400, 404, 500)
+        detail: Human-readable explanation of the error
+        type_url: URI reference identifying the problem type
+        title: Short human-readable summary (auto-generated if not provided)
+        instance: URI reference for specific occurrence
+    
+    Returns:
+        Dictionary with RFC 7807 compliant structure
+    """
+    # Auto-generate title based on status code if not provided
+    if title is None:
+        title = {
+            400: "Bad Request",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "Not Found",
+            409: "Conflict",
+            422: "Unprocessable Entity",
+            500: "Internal Server Error",
+            503: "Service Unavailable"
+        }.get(status_code, "Error")
+    
+    response = {
+        "type": type_url,
+        "title": title,
+        "status": status_code,
+        "detail": detail
+    }
+    
+    if instance:
+        response["instance"] = instance
+    
+    return response
+
+
+def bad_request_error(detail: str, instance: Optional[str] = None) -> Dict[str, Any]:
+    """Create a 400 Bad Request error."""
+    return error_response(
+        status_code=400,
+        detail=detail,
+        type_url="https://api.example.com/errors/bad-request",
+        title="Bad Request",
+        instance=instance
+    )
+
+
+def unauthorized_error(detail: str, instance: Optional[str] = None) -> Dict[str, Any]:
+    """Create a 401 Unauthorized error."""
+    return error_response(
+        status_code=401,
+        detail=detail,
+        type_url="https://api.example.com/errors/unauthorized",
+        title="Unauthorized",
+        instance=instance
+    )
+
+
+def forbidden_error(detail: str, instance: Optional[str] = None) -> Dict[str, Any]:
+    """Create a 403 Forbidden error."""
+    return error_response(
+        status_code=403,
+        detail=detail,
+        type_url="https://api.example.com/errors/forbidden",
+        title="Forbidden",
+        instance=instance
+    )
+
+
+def not_found_error(resource_type: str, identifier: str, instance: Optional[str] = None) -> Dict[str, Any]:
+    """Create a 404 Not Found error."""
+    detail = f"{resource_type} with {identifier} does not exist."
+    return error_response(
+        status_code=404,
+        detail=detail,
+        type_url="https://api.example.com/errors/not-found",
+        title="Not Found",
+        instance=instance
+    )
+
+
+def conflict_error(resource_type: str, identifier: str, instance: Optional[str] = None) -> Dict[str, Any]:
+    """Create a 409 Conflict error."""
+    detail = f"{resource_type} with {identifier} already exists."
+    return error_response(
+        status_code=409,
+        detail=detail,
+        type_url="https://api.example.com/errors/conflict",
+        title="Conflict",
+        instance=instance
+    )
+
+
+def internal_error(detail: str = "An unexpected error occurred while processing your request.", instance: Optional[str] = None) -> Dict[str, Any]:
+    """Create a 500 Internal Server Error."""
+    return error_response(
+        status_code=500,
+        detail=detail,
+        type_url="https://api.example.com/errors/internal-server-error",
+        title="Internal Server Error",
+        instance=instance
+    )
+
+
+def validation_error(detail: str, instance: Optional[str] = None) -> Dict[str, Any]:
+    """Create a 422 Unprocessable Entity error."""
+    return error_response(
+        status_code=422,
+        detail=detail,
+        type_url="https://api.example.com/errors/validation-error",
+        title="Unprocessable Entity",
+        instance=instance
+    )
