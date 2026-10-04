@@ -75,7 +75,20 @@ def create_shop(
         db.commit()
         db.refresh(new_shop)
 
-        return new_shop
+        # Convert SQLAlchemy model to dict for JSON serialization
+        shop_data = {
+            "id": new_shop.id,
+            "name": new_shop.name,
+            "logo": new_shop.logo,
+            "contact_name": new_shop.contact_name,
+            "contact_phone": new_shop.contact_phone,
+            "province": new_shop.province,
+            "city": new_shop.city,
+            "district": new_shop.district,
+            "address_detail": new_shop.address_detail,
+            "is_active": new_shop.is_active
+        }
+        return success_response(data=shop_data)
 
     except Exception as e:
         db.rollback()
@@ -273,10 +286,22 @@ def get_current_shop_info(
         StaffModel.status == 1  # 1: 已绑定在职
     ).scalar() or 1
 
-    # 动态将统计出来的员工总数挂载到 shop 对象上（配合 ShopResponse 渲染）
-    shop.staff_count = staff_count
+    # 将 SQLAlchemy 模型转换为字典以便 JSON 序列化
+    shop_data = {
+        "id": shop.id,
+        "name": shop.name,
+        "logo": shop.logo,
+        "contact_name": shop.contact_name,
+        "contact_phone": shop.contact_phone,
+        "province": shop.province,
+        "city": shop.city,
+        "district": shop.district,
+        "address_detail": shop.address_detail,
+        "is_active": shop.is_active,
+        "staff_count": staff_count
+    }
 
-    return success_response(data=shop)
+    return success_response(data=shop_data)
 
 @router.get(
     "/my-shops",

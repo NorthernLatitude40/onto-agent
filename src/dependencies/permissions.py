@@ -75,16 +75,12 @@ class ShopRoleChecker:
         # 3. 未绑定店铺或档案不存在
         if not staff:
             raise BusinessException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                code=ErrorCode.NOT_SHOP_STAFF,
                 detail=f"当前用户未绑定店铺 ID 为 {target_shop_id} 的员工权限"
             )
 
         # 4. 账号被禁用/已离职 ( status == 2 或 != 1 )
         if staff.status != 1:
             raise BusinessException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                code="STAFF_DISABLED",
                 detail="您在该店铺的员工账号已被禁用或尚未激活"
             )
 
