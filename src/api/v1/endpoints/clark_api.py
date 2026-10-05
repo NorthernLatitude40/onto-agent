@@ -2,12 +2,13 @@ import time
 import httpx
 import jwt
 from datetime import datetime, date, time as dt_time
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request, Path
+from fastapi import APIRouter, Depends, status, Query, Header, Request, Path
 from sqlalchemy.orm import Session
 from typing import Optional
 from sqlalchemy.exc import IntegrityError
 
 from src.common.database import get_db
+from src.model.rfc_7807_schema import ProblemDetails
 from src.model.staff_model import StaffModel
 from src.model.clark_schema import StaffUpdateSchema, StaffResponse
 from src.dependencies.permissions import allow_shop_manager
@@ -35,14 +36,53 @@ router = APIRouter()
     "/create",
     response_model=StaffResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="创建员工档案"
+    summary="创建员工档案",
+    description="管理员新增员工档案（未绑定openid）",
+    responses={
+        201: {
+            "description": "成功创建员工档案",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "nickname": "张三",
+                        "role": "staff",
+                        "status": 0,
+                        "is_active": False
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "请求参数错误或员工已存在",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "BAD_REQUEST",
+                        "detail": "店铺内已存在名为 '张三' 的待接受邀请员工，请勿重复创建"
+                    }
+                }
+            }
+        },
+        403: {
+            "description": "无权限访问",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "FORBIDDEN",
+                        "detail": "无权限创建员工"
+                    }
+                }
+            }
+        }
+    }
 )
 def create_staff(
     req: CreateStaffRequest,
     db: Session = Depends(get_db),
     current_user: StaffModel = Depends(allow_shop_manager),
     # 从 Header 中提取 X-Shop-Id
-    x_shop_id: str = Header(..., alias="X-Shop-Id") 
+    x_shop_id: str = Header(..., alias="X-Shop-Id", description="店铺ID", example="1")
 ):
     # ---------------------------------------------------------
     # 1. 安全校验：Header 及数据类型校验
@@ -50,6 +90,7 @@ def create_staff(
     if not x_shop_id or not x_shop_id.isdigit():
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            code="BAD_REQUEST",
             detail="请求头缺失或非法的 X-Shop-Id"
         )
 
@@ -68,6 +109,7 @@ def create_staff(
         status_text = "待接受邀请" if existing_staff.status == 0 else "在职"
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            code="BAD_REQUEST",
             detail=f"店铺内已存在名为 '{req.nickname}' 的{status_text}员工，请勿重复创建"
         )
 
@@ -96,12 +138,14 @@ def create_staff(
         db.rollback()
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            code="BAD_REQUEST",
             detail="创建失败，该店铺下员工数据已存在"
         )
     except Exception as e:
         db.rollback()
         raise BusinessException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="INTERNAL_SERVER_ERROR",
             detail=f"系统异常，创建员工失败: {str(e)}"
         )
 
@@ -119,11 +163,54 @@ def create_staff(
 # ==========================================
 # 接口: 统一更新员工资讯/状态/角色 (重构版：单表逻辑，移除中间表)
 # ==========================================
-@router.put("", response_model=StaffResponse, summary="统一更新员工资讯/状态/角色")
+@router.put(
+    "",
+    response_model=StaffResponse,
+    summary="统一更新员工资讯/状态/角色",
+    description="管理员统一更新员工信息、状态或角色",
+    responses={
+        200: {
+            "description": "成功更新员工信息",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "nickname": "张三",
+                        "role": "manager",
+                        "status": 1,
+                        "is_active": True
+                    }
+                }
+            }
+        },
+        403: {
+            "description": "无权限访问或越权操作",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "FORBIDDEN",
+                        "detail": "店长(manager)无法变更店主(owner)的角色或提升他人为店主"
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "员工不存在或不属于当前店铺",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "NOT_FOUND",
+                        "detail": "找不到该员工档案或该员工不属于当前店铺"
+                    }
+                }
+            }
+        }
+    }
+)
 def update_staff(
     payload: StaffUpdateSchema,
-    staff_id: int = Header(..., alias="X-Staff-Id"), # 🌟 直接从 Header 提取
-    shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
+    staff_id: int = Header(..., alias="X-Staff-Id", description="员工ID", example="1"), # 🌟 直接从 Header 提取
+    shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID", example="1"),
     db: Session = Depends(get_db),
     current_user: StaffModel = Depends(allow_shop_manager), # 当前操作者的 StaffModel 实例
 ):
@@ -141,8 +228,9 @@ def update_staff(
     ).first()
 
     if not target_staff:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
+        raise BusinessException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="NOT_FOUND",
             detail="找不到该员工档案或该员工不属于当前店铺"
         )
 
@@ -163,9 +251,10 @@ def update_staff(
         # 店长 (manager) 不能修改店主 (owner) 的角色，也不能将别人提升为店主 (owner)
         if operator_role == "manager":
             if target_staff.role == "owner" or new_role_str == "owner":
-                raise HTTPException(
+                raise BusinessException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="权限不足：店长(manager)无法变更店主(owner)的角色或提升他人为店主"
+                    code="FORBIDDEN",
+                    detail="店长(manager)无法变更店主(owner)的角色或提升他人为店主"
                 )
         
         # 覆写处理后的字符串类型 role
@@ -192,8 +281,9 @@ def update_staff(
         db.refresh(target_staff)
     except Exception as e:
         db.rollback()
-        raise HTTPException(
+        raise BusinessException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="INTERNAL_SERVER_ERROR",
             detail=f"更新员工失败: {str(e)}"
         )
 
@@ -209,9 +299,61 @@ def update_staff(
     )
 
 # ──────── 🌟 2：查询店铺下所有关联员工 (重构版：单表逻辑，移除中间表) ────────
-@router.get("", summary="查询店铺下关联的所有员工")
+@router.get(
+    "",
+    summary="查询店铺下关联的所有员工",
+    description="查询指定店铺下的员工列表，开发/测试环境超级管理员可跨店切换测试",
+    responses={
+        200: {
+            "description": "成功获取员工列表",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": 200,
+                        "message": "success",
+                        "data": [
+                            {
+                                "id": 1,
+                                "name": "张三",
+                                "is_active": True,
+                                "isActive": True,
+                                "status": 1,
+                                "isCreator": False,
+                                "roleName": "店长",
+                                "role": "manager",
+                                "invite_token": None
+                            },
+                            {
+                                "id": 2,
+                                "name": "李四",
+                                "is_active": False,
+                                "isActive": False,
+                                "status": 0,
+                                "isCreator": False,
+                                "roleName": "员工",
+                                "role": "staff",
+                                "invite_token": "INVITE_2_1_1706119234"
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        403: {
+            "description": "无权限访问或越权操作",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "FORBIDDEN",
+                        "detail": "您无权管理该店铺的员工档案或身份已失效"
+                    }
+                }
+            }
+        }
+    }
+)
 def get_staff_list(
-    x_shop_id: int = Header(..., alias="X-Shop-Id"),
+    x_shop_id: int = Header(..., alias="X-Shop-Id", description="店铺ID", example="1"),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
@@ -244,6 +386,7 @@ def get_staff_list(
             error_msg = "线上生产环境禁止跨店查看数据！" if is_super_admin else "您无权管理该店铺的员工档案或身份已失效"
             raise BusinessException(
                 status_code=status.HTTP_403_FORBIDDEN,
+                code="FORBIDDEN",
                 detail=error_msg
             )
 
@@ -313,7 +456,51 @@ def get_staff_list(
 # ==========================================
 # 接口 2: 生成邀请 Token (点击邀请按钮时调用)declare
 # ==========================================
-@router.post("/staff/generate-invite")
+@router.post(
+    "/staff/generate-invite",
+    summary="生成邀请 Token (点击邀请按钮时调用)",
+    description="管理员为指定员工生成邀请Token，用于邀请员工加入店铺",
+    responses={
+        200: {
+            "description": "成功生成邀请Token",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": 200,
+                        "message": "生成邀请成功",
+                        "data": {
+                            "staff_id": 1,
+                            "staff_name": "张三",
+                            "invite_token": "INVITE_1_1_1706119234"
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "员工不存在",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "NOT_FOUND",
+                        "detail": "未找到该员工档案"
+                    }
+                }
+            }
+        },
+        403: {
+            "description": "无权限访问",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "FORBIDDEN",
+                        "detail": "无权限生成邀请"
+                    }
+                }
+            }
+        }
+    }
+)
 def generate_invite(
     req: CreateInviteRequest,
     db: Session = Depends(get_db),
@@ -326,7 +513,11 @@ def generate_invite(
     ).first()
 
     if not staff:
-        raise HTTPException(status_code=404, detail="未找到该员工档案")
+        raise BusinessException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="NOT_FOUND",
+            detail="未找到该员工档案"
+        )
 
     invite_token = f"INVITE_{staff.id}_{staff.shop_id}_{int(time.time())}"
 
@@ -364,13 +555,68 @@ async def get_wx_openid_by_code(code: str) -> dict:
     if "errcode" in data and data["errcode"] != 0:
         raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"微信登录失败: {data.get('errmsg', '未知错误')}",
+            code="BAD_REQUEST",
+            detail=f"微信登录失败: {data.get('errmsg', '未知错误')}"
         )
 
     return data
 
 
-@router.post("/accept-invite", summary="员工接受邀请并绑定微信")
+@router.post(
+    "/accept-invite",
+    summary="员工接受邀请并绑定微信",
+    description="受邀员工使用微信code接受邀请并绑定微信账号，完成店铺加入流程",
+    responses={
+        200: {
+            "description": "成功接受邀请并绑定微信",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "shop_id": 1,
+                        "staff_id": 2,
+                        "role": "staff",
+                        "nickname": "张三",
+                        "message": "成功加入店铺！"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "请求参数错误或邀请已失效",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "BAD_REQUEST",
+                        "detail": "邀请凭证已失效或不合法"
+                    }
+                }
+            }
+        },
+        403: {
+            "description": "无权限访问或重复加入",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "FORBIDDEN",
+                        "detail": "您已经是该店铺的正式成员，无需重复认领其他档案"
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "员工档案不存在",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "NOT_FOUND",
+                        "detail": "未找到对应员工档案或已被移除"
+                    }
+                }
+            }
+        }
+    }
+)
 async def accept_invite(
     req: AcceptInviteRequest,
     db: Session = Depends(get_db)
@@ -392,7 +638,8 @@ async def accept_invite(
             target_shop_id = payload.get("shop_id")
         except Exception:
             raise BusinessException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code="BAD_REQUEST",
                 detail="邀请凭证已失效或不合法"
             )
             
@@ -401,7 +648,8 @@ async def accept_invite(
         
     else:
         raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="BAD_REQUEST",
             detail="缺少邀请凭证或店铺信息"
         )
 
@@ -413,7 +661,8 @@ async def accept_invite(
 
     if not openid:
         raise BusinessException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="BAD_REQUEST",
             detail="微信登录凭证 (code) 无效"
         )
 
@@ -440,7 +689,8 @@ async def accept_invite(
 
         if not staff:
             raise BusinessException(
-                status_code=status.HTTP_404_NOT_FOUND, 
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="NOT_FOUND",
                 detail="未找到对应员工档案或已被移除"
             )
 
@@ -448,6 +698,7 @@ async def accept_invite(
         if staff.status == 1 and staff.user_id and staff.user_id != user.id:
             raise BusinessException(
                 status_code=status.HTTP_400_BAD_REQUEST,
+                code="BAD_REQUEST",
                 detail="该邀请已被其他人接受，无法重复领用"
             )
 
@@ -461,8 +712,9 @@ async def accept_invite(
 
         if existing_user_staff:
             raise BusinessException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="您已经是该店铺的正式成员，无需重复认领其他档案"
+                status_code=status.HTTP_403_FORBIDDEN,
+                error_code=ErrorCode.ALREADY_MEMBER,
+                message="您已经是该店铺的正式成员，无需重复认领其他档案"
             )
 
     else:
@@ -480,6 +732,7 @@ async def accept_invite(
             if staff.status == 1:
                 raise BusinessException(
                     status_code=status.HTTP_400_BAD_REQUEST,
+                    code="BAD_REQUEST",
                     detail="您已经是该店铺的正式成员，无需重复加入"
                 )
             # 已存在但为停用/禁用状态 (status == -1 或 0)
@@ -509,6 +762,7 @@ async def accept_invite(
         db.rollback()
         raise BusinessException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="INTERNAL_SERVER_ERROR",
             detail=f"绑定失败: {str(e)}"
         )
 

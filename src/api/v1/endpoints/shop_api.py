@@ -22,7 +22,36 @@ logger = get_logger("API_SERVICE")
 router = APIRouter()
 
 # ──────── 商家自主开店/创建店铺 API (单表架构重构版) ────────
-@router.post("/create", response_model=ShopResponse, status_code=status.HTTP_201_CREATED, summary="创建店铺")
+@router.post(
+    "/create",
+    response_model=ShopResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="创建店铺",
+    responses={
+        201: {
+            "description": "店铺创建成功",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "name": "苹果专卖店",
+                        "logo": "",
+                        "contact_name": "",
+                        "contact_phone": "",
+                        "province": "",
+                        "city": "",
+                        "district": "",
+                        "address_detail": "",
+                        "staff_count": 1,
+                        "is_active": True
+                    }
+                }
+            }
+        },
+        400: {"description": "请求参数错误"},
+        500: {"description": "服务器内部错误"}
+    }
+)
 def create_shop(
     payload: CreateShopPayload,
     db: Session = Depends(get_db),
@@ -85,7 +114,22 @@ def create_shop(
         )
     
 # ==================== 5. 刪：刪除店鋪 (軟刪除) ====================
-@router.delete("/{target_shop_id}", summary="刪除店鋪(僅Owner可操作)")
+@router.delete(
+    "/{target_shop_id}",
+    summary="刪除店鋪(僅Owner可操作)",
+    responses={
+        200: {
+            "description": "店铺已成功解散/註銷",
+            "content": {
+                "application/json": {
+                    "example": {"message": "店鋪已成功解散/註銷"}
+                }
+            }
+        },
+        403: {"description": "權限不足：只有店主可以註銷店鋪"},
+        404: {"description": "店铺不存在"}
+    }
+)
 def delete_shop(
     target_shop_id: int,
     db: Session = Depends(get_db),
@@ -99,7 +143,11 @@ def delete_shop(
     ).first()
 
     if not staff:
-        raise HTTPException(status_code=403, detail="權限不足：只有店主可以註銷店鋪")
+        raise BusinessException(
+            code="FORBIDDEN",
+            detail="權限不足：只有店主可以註銷店鋪",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     shop = db.query(ShopModel).filter(ShopModel.id == target_shop_id).first()
     if shop:
@@ -109,7 +157,39 @@ def delete_shop(
     return {"message": "店鋪已成功解散/註銷"}
 
 # ──────── 修改店铺信息 API (单表架构重构版) ────────
-@router.put("/update", summary="修改店铺信息")
+@router.put(
+    "/update",
+    summary="修改店铺信息",
+    responses={
+        200: {
+            "description": "店铺信息更新成功",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": 200,
+                        "message": "店铺信息更新成功！",
+                        "data": {
+                            "id": 1,
+                            "name": "苹果专卖店",
+                            "logo": "https://example.com/logo.png",
+                            "contact_name": "店长",
+                            "contact_phone": "13800000000",
+                            "province": "广东省",
+                            "city": "深圳市",
+                            "district": "南山区",
+                            "address_detail": "科技园路1号",
+                            "address": "广东省深圳市南山区科技园路1号"
+                        }
+                    }
+                }
+            }
+        },
+        400: {"description": "请求参数错误"},
+        403: {"description": "权限不足"},
+        404: {"description": "店铺不存在"},
+        500: {"description": "服务器内部错误"}
+    }
+)
 def update_shop_info(
     payload: UpdateShopPayload,
     db: Session = Depends(get_db),
@@ -125,9 +205,10 @@ def update_shop_info(
     # 0. 请求头强校验
     # ---------------------------------------------------------
     if not x_shop_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请求头缺少 X-Shop-Id 参数！"
+        raise BusinessException(
+            code="BAD_REQUEST",
+            detail="请求头缺少 X-Shop-Id 参数！",
+            status_code=status.HTTP_400_BAD_REQUEST
         )
 
     # ---------------------------------------------------------
@@ -140,17 +221,19 @@ def update_shop_info(
     ).first()
 
     if not current_staff:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="您无权管理该店铺或在该店铺的身份已失效！"
+        raise BusinessException(
+            code="FORBIDDEN",
+            detail="您无权管理该店铺或在该店铺的身份已失效！",
+            status_code=status.HTTP_403_FORBIDDEN
         )
 
     # 角色校验：只有店主/店长/管理员有权修改店铺信息
     allowed_roles = {ShopRole.OWNER.value, "owner", "manager", "admin"}
     if current_staff.role not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="权限不足：普通员工无权修改店铺信息！"
+        raise BusinessException(
+            code="FORBIDDEN",
+            detail="权限不足：普通员工无权修改店铺信息！",
+            status_code=status.HTTP_403_FORBIDDEN
         )
 
     # ---------------------------------------------------------
@@ -158,9 +241,10 @@ def update_shop_info(
     # ---------------------------------------------------------
     shop = db.query(ShopModel).filter(ShopModel.id == x_shop_id).first()
     if not shop:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="未找到对应店铺，无法修改！"
+        raise BusinessException(
+            code="NOT_FOUND",
+            detail="未找到对应店铺，无法修改！",
+            status_code=status.HTTP_404_NOT_FOUND
         )
 
     # ---------------------------------------------------------
@@ -197,9 +281,10 @@ def update_shop_info(
     except Exception as e:
         db.rollback()
         logger.exception("【API 错误】修改店铺信息失败:")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"更新店铺信息失败: {str(e)}"
+        raise BusinessException(
+            code="INTERNAL_SERVER_ERROR",
+            detail=f"更新店铺信息失败: {str(e)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 # ──────── 🌟 获取当前店铺信息 API (单表架构重构版) ────────
@@ -207,7 +292,31 @@ def update_shop_info(
     "/current",
     response_model=Optional[ShopResponse],  # 允许返回店铺对象或 None (JSON null)
     status_code=status.HTTP_200_OK,
-    summary="获取当前登录用户关联的店铺信息"
+    summary="获取当前登录用户关联的店铺信息",
+    responses={
+        200: {
+            "description": "成功获取店铺信息",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "name": "苹果专卖店",
+                        "logo": "https://example.com/logo.png",
+                        "contact_name": "店长",
+                        "contact_phone": "13800000000",
+                        "province": "广东省",
+                        "city": "深圳市",
+                        "district": "南山区",
+                        "address_detail": "科技园路1号",
+                        "staff_count": 5,
+                        "is_active": True
+                    }
+                }
+            }
+        },
+        403: {"description": "权限不足"},
+        404: {"description": "店铺不存在或已被禁用"}
+    }
 )
 def get_current_shop_info(
     x_shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID"),
@@ -262,7 +371,11 @@ def get_current_shop_info(
     ).first()
 
     if not shop:
-        raise BusinessException(detail="目标店铺不存在或已被禁用", status_code=status.HTTP_404_NOT_FOUND)
+        raise BusinessException(
+            code="NOT_FOUND",
+            detail="目标店铺不存在或已被禁用",
+            status_code=status.HTTP_404_NOT_FOUND
+        )
 
     # ---------------------------------------------------------
     # 3. 统计该店铺下在职员工总数 (单表 StaffModel 统计)
@@ -278,8 +391,41 @@ def get_current_shop_info(
     return shop
 
 @router.get(
-    "/my-shops", 
-    summary="获取当前用户关联的店铺列表(含角色、Staff ID及默认店铺标识)"
+    "/my-shops",
+    summary="获取当前用户关联的店铺列表(含角色、Staff ID及默认店铺标识)",
+    responses={
+        200: {
+            "description": "成功获取店铺列表",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {
+                            "id": 1,
+                            "staff_id": 5,
+                            "name": "苹果专卖店",
+                            "logo": "https://example.com/logo.png",
+                            "contact_name": "店长",
+                            "contact_phone": "13800000000",
+                            "role": "owner",
+                            "is_default": True,
+                            "address": "广东省深圳市南山区科技园路1号"
+                        },
+                        {
+                            "id": 2,
+                            "staff_id": 6,
+                            "name": "华为专卖店",
+                            "logo": "https://example.com/huawei_logo.png",
+                            "contact_name": "经理",
+                            "contact_phone": "13900000000",
+                            "role": "manager",
+                            "is_default": False,
+                            "address": "广东省深圳市宝安区沙头角路1号"
+                        }
+                    ]
+                }
+            }
+        }
+    }
 )
 def get_my_shops(
     db: Session = Depends(get_db),

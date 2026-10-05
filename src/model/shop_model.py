@@ -5,6 +5,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from src.common.database import Base  # 你的 Base基类
 
+
 class ShopModel(Base):
     __tablename__ = "shops"
 
@@ -22,6 +23,8 @@ class ShopModel(Base):
     # 1个店铺对应多个 staff 记录
     staffs = relationship("StaffModel", back_populates="shop", cascade="all, delete-orphan")
 
+    # 避免循环导入问题，使用字符串引用
+    # 1个店铺对应多个库存记录
     inventories = relationship("InventoryModel", back_populates="shop", cascade="all, delete-orphan")
 
     partners = relationship("Partner", back_populates="shop", cascade="all, delete-orphan")
