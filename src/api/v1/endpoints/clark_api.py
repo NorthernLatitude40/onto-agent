@@ -82,7 +82,7 @@ def create_staff(
     db: Session = Depends(get_db),
     current_user: StaffModel = Depends(allow_shop_manager),
     # 从 Header 中提取 X-Shop-Id
-    x_shop_id: str = Header(..., alias="X-Shop-Id", description="店铺ID", example="1")
+    x_shop_id: str = Header(..., alias="X-Shop-Id", description="店铺ID", examples=["1"])
 ):
     # ---------------------------------------------------------
     # 1. 安全校验：Header 及数据类型校验
@@ -209,8 +209,8 @@ def create_staff(
 )
 def update_staff(
     payload: StaffUpdateSchema,
-    staff_id: int = Header(..., alias="X-Staff-Id", description="员工ID", example="1"), # 🌟 直接从 Header 提取
-    shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID", example="1"),
+    staff_id: int = Header(..., alias="X-Staff-Id", description="员工ID", examples=["1"]), # 🌟 直接从 Header 提取
+    shop_id: Optional[int] = Header(None, alias="X-Shop-Id", description="当前选择的店铺ID", examples=["1"]),
     db: Session = Depends(get_db),
     current_user: StaffModel = Depends(allow_shop_manager), # 当前操作者的 StaffModel 实例
 ):
@@ -353,7 +353,7 @@ def update_staff(
     }
 )
 def get_staff_list(
-    x_shop_id: int = Header(..., alias="X-Shop-Id", description="店铺ID", example="1"),
+    x_shop_id: int = Header(..., alias="X-Shop-Id", description="店铺ID", examples=["1"]),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):

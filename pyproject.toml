@@ -67,6 +67,8 @@ timeout = 5.0
 markers = [
     "integration: integration tests that require external services",
 ]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff.lint]
 ignore = [

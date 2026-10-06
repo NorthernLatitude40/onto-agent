@@ -1,17 +1,61 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 from src.model.clark_schema import SetDefaultIdentityResponse, SetDefaultIdentitySchema
 from src.api.auth_api import get_current_user, create_access_token
 from src.model.user_model import UserModel
 from src.common.database import get_db
 from src.model.staff_model import StaffModel
+from src.common.exceptions import BusinessException
 
 router = APIRouter()
 
 @router.put(
-    "/default-identity", 
+    "/default-identity",
     response_model=SetDefaultIdentityResponse,
-    summary="设置用户的全局默认店铺及身份"
+    summary="设置用户的全局默认店铺及身份",
+    responses={
+        200: {
+            "description": "成功设置默认身份",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "type": "about:blank",
+                        "title": "默认身份设置成功",
+                        "status": 200,
+                        "detail": "默认身份设置成功"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "无效的店铺身份或不属于当前用户",
+            "content": {
+                "application/problem+json": {
+                    "example": {
+                        "type": "about:blank",
+                        "title": "INVALID_STAFF_IDENTITY",
+                        "status": 400,
+                        "detail": "指定的店铺身份无效或不属于当前用户",
+                        "instance": "/api/v1/default-identity"
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "数据库更新失败",
+            "content": {
+                "application/problem+json": {
+                    "example": {
+                        "type": "about:blank",
+                        "title": "DATABASE_UPDATE_FAILED",
+                        "status": 500,
+                        "detail": "数据库更新失败: connection error",
+                        "instance": "/api/v1/default-identity"
+                    }
+                }
+            }
+        }
+    }
 )
 def set_default_identity(
     payload: SetDefaultIdentitySchema,
@@ -27,8 +71,9 @@ def set_default_identity(
     ).first()
 
     if not staff:
-        raise HTTPException(
+        raise BusinessException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            code="INVALID_STAFF_IDENTITY",
             detail="指定的店铺身份无效或不属于当前用户"
         )
 
@@ -40,9 +85,9 @@ def set_default_identity(
         db.add(current_user)
         db.commit()
     except Exception as e:
-        db.rollback()
-        raise HTTPException(
+        raise BusinessException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="DATABASE_UPDATE_FAILED",
             detail=f"数据库更新失败: {str(e)}"
         )
 
