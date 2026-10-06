@@ -2,7 +2,9 @@ import os
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
-SKILLS_DIR = "src/core/voyager_agent/skills_storage"
+# Get the root path from the script location
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SKILLS_DIR = os.path.join(root_path, "core", "voyager_agent", "skills_storage")
 
 
 def sync_skills():

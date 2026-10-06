@@ -12,7 +12,7 @@ from src.github.submit_tool import (  # GitHub 模組
     get_file_content,
     submit_code_change,
 )
-from ..core.voyager_agent.skill_library import SkillLibrary  # Voyager Vector DB & 本地存儲
+from src.core.voyager_agent.skill_library import SkillLibrary  # Voyager Vector DB & 本地存儲
 
 
 class VoyagerAgentOrchestrator:
