@@ -42,17 +42,7 @@ def get_order_list(
     # 1. 查詢採購/入庫單據 (order_type == 1 或未指定)
     if order_type is None or order_type == 1:
         # 1. 根據 status.value 決定過濾條件 (status.value == 1 為待入庫，其餘為已完成歷史)
-        if status.value == 1:
-            # 待入庫
-            p_query: Query = (
-                db.query(InventoryModel, PartnerModel)
-                .outerjoin(PartnerModel, InventoryModel.supplier_id == PartnerModel.id)
-                .filter(
-                    InventoryModel.shop_id == shop_id,
-                    InventoryModel.status == StockStatusEnum.PENDING.value,  # 或 1
-                )
-            )
-        else:
+        if status is not None and status.value == 2:
             # 歷史已完成入庫 (包括：在庫、已售出、維修中、已報廢、已退貨等)
             completed_statuses = [
                 StockStatusEnum.IN_STOCK.value,
@@ -66,9 +56,29 @@ def get_order_list(
                 .outerjoin(PartnerModel, InventoryModel.supplier_id == PartnerModel.id)
                 .filter(
                     InventoryModel.shop_id == shop_id,
-                    InventoryModel.status.in_(completed_statuses), 
+                    InventoryModel.status.in_(completed_statuses),
                 )
             )
+        else:
+            # 待入庫 (status.value == 1) 或未指定 status (查詢所有)
+            if status is not None and status.value == 1:
+                p_query: Query = (
+                    db.query(InventoryModel, PartnerModel)
+                    .outerjoin(PartnerModel, InventoryModel.supplier_id == PartnerModel.id)
+                    .filter(
+                        InventoryModel.shop_id == shop_id,
+                        InventoryModel.status == StockStatusEnum.PENDING.value,
+                    )
+                )
+            else:
+                # 未指定 status，查詢所有採購/入庫單據
+                p_query: Query = (
+                    db.query(InventoryModel, PartnerModel)
+                    .outerjoin(PartnerModel, InventoryModel.supplier_id == PartnerModel.id)
+                    .filter(
+                        InventoryModel.shop_id == shop_id,
+                    )
+                )
         
         if kw:
             p_query = p_query.filter(
@@ -127,8 +137,12 @@ def get_order_list(
                     )
                 )
 
+            # Debug: print sales orders before loop
+            print(f"SALES QUERY RESULTS COUNT: {len(s_query.all())}")
+            
             # 巡迴解包：因為 query 包含 total_quantity，此處為 3 個變數 (order, customer, total_quantity)
             for order, customer, total_quantity in s_query.all():
+                print(f"Processing sales order: {order.id}")
                 all_orders.append({
                     "id": order.id,
                     "order_sn": order.order_sn,
