@@ -28,6 +28,11 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "en-US": "Bad request.",
         "ja-JP": "不正なリクエストです。",
     },
+    "INVALID_PARAMETER": {
+        "zh-CN": "无效的参数",
+        "en-US": "Invalid parameter.",
+        "ja-JP": "無効なパラメータです。",
+    },
 }
 
 TRANSLATIONS.update({
@@ -77,6 +82,17 @@ TRANSLATIONS.update({
         "ja-JP": "服务器内部数据错误"
     },
     
+    "DUPLICATE_REQUEST": {
+        "zh-CN": "重复请求，请勿重复操作",
+        "en-US": "Duplicate request, please do not repeat the operation.",
+        "ja-JP": "重複リクエストです。同じ操作を繰り返さないでください。"
+    },
+    
+    "MISSING_SHOP_ID": {
+        "zh-CN": "缺少店铺 ID",
+        "en-US": "Missing shop ID.",
+        "ja-JP": "ショップIDが不足しています。"
+    },
     
 })
 
