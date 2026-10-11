@@ -49,8 +49,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get("/list", response_model=StockListResponse, summary="獲取當前門店的設備庫存列表")
-def get_inventory_list(
+@router.get("/list1", response_model=StockListResponse, summary="獲取當前門店的設備庫存列表")
+def get_inventory_list1(
     db: Session = Depends(get_db),
     current_staff: StaffModel = Depends(get_current_staff)
 ):
@@ -77,6 +77,86 @@ def get_inventory_list(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"查詢失敗: {str(e)}"
         )
+
+# ------------------------------------------------------------------
+# 2. 接口实现：GET /api/v1/shop/inventory/list
+# ------------------------------------------------------------------
+# 注意：把参数 query 中的 status 改名为 stock_status，避免与 fastapi.status 模块重名冲突！
+@router.get("/list", response_model=StockListResponse, summary="獲取當前門店的設備庫存列表")
+def get_inventory_list(
+    stock_status: Optional[int] = Query(None, description="庫存狀態: 1-在庫, 2-已售, 3-退貨等"),
+    category: Optional[int] = Query(None, description="分類篩選: 1-新機, 2-二手機"),
+    keyword: Optional[str] = Query(None, description="模糊搜尋：機型名稱或串號/SN/IMEI"),
+    sort_by: Optional[str] = Query(None, description="排序欄位，例如: 'stock_age' 或 'created_at'"),
+    sort_order: Optional[str] = Query("desc", description="排序順序: 'asc' 或 'desc'"),
+    page: int = Query(1, ge=1, description="頁碼"),
+    page_size: int = Query(20, ge=1, le=100, description="每頁筆數"),
+    db: Session = Depends(get_db),
+    # 🌟 核心重構：直接注入依賴，驗證身分並獲取當前員工
+    current_staff: StaffModel = Depends(allow_shop_staff) 
+):
+    """
+    獲取當前門店下的設備庫存列表（支持分頁、狀態、分類、關鍵字檢索與動態排序）
+    """
+    # 1. 直接從 current_staff 中安全獲取當前請求的 shop_id
+    shop_id = current_staff.shop_id
+
+    # 2. 基礎查詢：過濾當前門店的數據
+    query = db.query(InventoryModel).filter(InventoryModel.shop_id == shop_id)
+
+    # 3. 按狀態篩選
+    if stock_status is not None:
+        query = query.filter(InventoryModel.status == stock_status)
+
+    # 4. 按分類篩選 (1: 新機, 2: 二手機)
+    if category is not None:
+        query = query.filter(InventoryModel.category == category)
+
+    # 5. 按關鍵字檢索 (過濾空字串、"undefined" 與 "null")
+    if keyword and keyword.strip() and keyword.strip().lower() not in ["undefined", "null"]:
+        kw = f"%{keyword.strip()}%"
+        query = query.filter(
+            or_(
+                InventoryModel.title.ilike(kw),
+                InventoryModel.sn_code.ilike(kw)
+            )
+        )
+
+    # 6. 計算符合條件的總筆數
+    total = query.count()
+
+    # 7. 🌟 動態排序邏輯 (Dynamic Sorting)
+    order_direction = sort_order.lower() if sort_order else "desc"
+
+    if sort_by == "stock_age":
+        # 💡 庫齡邏輯：庫齡 = 當前時間 - 入庫時間(in_stock_time)
+        # 庫齡越長 (desc) -> 入庫時間越早 (asc)
+        # 庫齡越短 (asc)  -> 入庫時間越晚 (desc)
+        if order_direction == "asc":
+            query = query.order_by(desc(InventoryModel.in_stock_time))
+        else:
+            query = query.order_by(asc(InventoryModel.in_stock_time))
+    else:
+        # 預設按創建時間排序
+        if order_direction == "asc":
+            query = query.order_by(asc(InventoryModel.created_at))
+        else:
+            query = query.order_by(desc(InventoryModel.created_at))
+
+    # 8. 分頁切片
+    items = (
+        query.offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    # 9. 遵循 Bare Payload 規範或 StockListResponse 結構返回
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": items
+    }
 
 @router.get("/search_by_sn")
 def search_inventory_by_sn(
@@ -146,8 +226,8 @@ async def get_sales_detail(
             detail=f"查詢失敗: {str(e)}"
         )
 
-@router.get("/inventory/detail/{target_id}")
-async def get_inventory_detail(
+@router.get("/inventory/detail1/{target_id}")
+async def get_inventory_detail1(
     target_id: int,
     db: AsyncSession = Depends(get_db_async),
     current_staff: StaffModel = Depends(get_current_staff)
@@ -170,6 +250,61 @@ async def get_inventory_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"查詢失敗: {str(e)}"
         )
+
+@router.get("/inventory/detail/{target_id}")
+async def get_inventory_detail(
+    target_id: str,
+    x_shop_id: Optional[str] = Header(None, alias="X-Shop-Id"),
+    db: AsyncSession = Depends(get_db_async)
+):
+    """獲取設備詳情 (支援用數字 ID 或序列號/IMEI 查詢)"""
+    
+    stmt = select(InventoryModel)
+    
+    # 支持主鍵 ID 或 SN 號查詢
+    if target_id.isdigit():
+        stmt = stmt.where(or_(InventoryModel.id == int(target_id), InventoryModel.sn_code == target_id))
+    else:
+        stmt = stmt.where(InventoryModel.sn_code == target_id)
+
+    if x_shop_id:
+        stmt = stmt.where(InventoryModel.shop_id == int(x_shop_id))
+
+    result = await db.execute(stmt)
+    device = result.scalars().first()
+
+    if not device:
+        raise HTTPException(status_code=404, detail="未找到該設備資料")
+
+    # 查詢供應商資訊 (若有關聯 supplier_id)
+    supplier_name, supplier_phone = "未知供應商", "-"
+    if device.supplier_id:
+        p_stmt = select(Partner).where(Partner.id == device.supplier_id)
+        p_res = await db.execute(p_stmt)
+        supplier = p_res.scalars().first()
+        if supplier:
+            supplier_name = supplier.name or supplier_name
+            supplier_phone = supplier.phone or supplier_phone
+
+    return {
+        "code": 200,
+        "msg": "success",
+        "data": {
+            "id": device.id,
+            "sn_code": device.sn_code,
+            "title": device.title,
+            "spec": device.spec,
+            "category": device.category,
+            "purchase_price": float(device.purchase_price or 0.0),
+            "selling_price": float(device.selling_price or 0.0),
+            "stock_quantity": device.stock_quantity,
+            "status": int(device.status),  # 回傳數字 1, 2, 3, 4
+            "supplier_name": supplier_name,
+            "supplier_phone": supplier_phone,
+            "in_stock_time": device.in_stock_time.strftime("%Y-%m-%d %H:%M:%S") if device.in_stock_time else "",
+            "remark": device.remark
+        }
+    }
 
 @router.get("/device/options", summary="獲取機型與屬性字典")
 async def get_device_options(db: AsyncSession = Depends(get_db_async)):
