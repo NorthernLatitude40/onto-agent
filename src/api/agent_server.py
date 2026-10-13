@@ -105,8 +105,8 @@ def create_api(harness) -> FastAPI:
 
     # 3. 动态配置 CORS 中间件（支持环境变量覆盖）
     allowed_origins = os.getenv(
-        "CORS_ORIGINS", 
-        "http://localhost:5173,http://127.0.0.1:5173"
+        "CORS_ORIGINS",
+        "https://onto-web-front-fyajaslfh-wayne-65df.vercel.app,http://localhost:5173,http://127.0.0.1:5173"
     ).split(",")
 
     app.add_middleware(
