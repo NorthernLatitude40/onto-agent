@@ -26,3 +26,5 @@ Thumbs.db
 .override.yml
 
 *.pem
+
+**/ontoagent.egg-info/
