@@ -2,6 +2,7 @@ from sqlalchemy import Column, BigInteger, String, Numeric, DateTime, func, Smal
 from src.common.database import SessionLocal, Base, engine
 from sqlalchemy.orm import relationship
 from datetime import datetime
+from src.model.shop_model import ShopModel
 
 
 # ==========================================

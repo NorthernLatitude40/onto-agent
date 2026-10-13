@@ -233,8 +233,6 @@ async def wx_login(payload: WxLoginPayload, db: Session = Depends(get_db)):
         # A. 创建微信账号基本数据 (UserModel)
         user = UserModel(
             openid=openid,
-            nickname="手机店员",
-            role="staff",
         )
         db.add(user)
         db.flush()  # 拿到 user.id

@@ -5,6 +5,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from src.common.database import Base  # 你的 Base基类
 
+
 class ShopModel(Base):
     __tablename__ = "shops"
 
@@ -20,8 +21,11 @@ class ShopModel(Base):
     is_active = Column(Boolean, default=True, comment="店铺状态：1-正常，0-禁用")
 
     # 1个店铺对应多个 staff 记录
+    # 使用字符串引用避免循环导入问题
     staffs = relationship("StaffModel", back_populates="shop", cascade="all, delete-orphan")
 
+    # 避免循环导入问题，使用字符串引用
+    # 1个店铺对应多个库存记录
     inventories = relationship("InventoryModel", back_populates="shop", cascade="all, delete-orphan")
 
     partners = relationship("Partner", back_populates="shop", cascade="all, delete-orphan")

@@ -24,6 +24,7 @@ class BusinessException(Exception):
         type_url: str = "about:blank",
         extra: Optional[Dict[str, Any]] = None,
     ):
+        super().__init__(detail or code)  
         self.status_code = status_code
         self.code = code
         self.detail = detail

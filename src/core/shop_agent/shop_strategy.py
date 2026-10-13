@@ -18,7 +18,7 @@ from src.common.database_restful import supabase
 
 from src.core.llm_router import router
 from src.core.shop_agent.prompts import SHOP_SYSTEM_PROMPT
-from src.core.shop_agent.tools import add_device, query_shop_data, sell_device
+from src.core.shop_agent.tools import add_device, query_shop_data, sell_device, search_campervan_pricing, search_knowledge_base
 from src.core.voyager_agent.skill_library import SkillLibrary
 from ..strategies.base import BaseAgentStrategy
 from src.common.redis_client import redis_client
@@ -220,6 +220,8 @@ class ShopAgentStrategy(BaseAgentStrategy):
             query_shop_data,
             graph_structure_tool,
             voyager_queue_tool,
+            search_campervan_pricing, 
+            search_knowledge_base,
         ]
         all_tools = local_tools + dynamic_skill_tools + list(mcp_tools)
 

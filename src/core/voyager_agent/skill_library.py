@@ -18,12 +18,22 @@ class SkillLibrary:
         supabase_key: str,
         gemini_api_key: str,
         embedding_model: str = "gemini-embedding-001",
-        skills_dir: Optional[str] = "src/core/voyager_agent/skills_storage",
+        skills_dir: Optional[str] = None,
     ):
         self.supabase: Client = create_client(supabase_url, supabase_key)
         self.ai_client = genai.Client(api_key=gemini_api_key)
         self.embedding_model = embedding_model
-        self.skills_dir = skills_dir
+        
+        # 自動偵測 skills_dir 路徑，如果未指定
+        if skills_dir is None:
+            # 取得當前檔案的絕對路徑
+            current_file_path = os.path.abspath(__file__)
+            # 取得 src/core/voyager_agent 目錄的絕對路徑
+            voyager_agent_dir = os.path.dirname(current_file_path)
+            # 建構 skills_storage 的完整路徑
+            self.skills_dir = os.path.join(voyager_agent_dir, "skills_storage")
+        else:
+            self.skills_dir = skills_dir
 
         # 若指定了本地備份路徑，自動建立目錄
         if self.skills_dir:

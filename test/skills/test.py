@@ -78,13 +78,14 @@ app = workflow.compile()
 
 # ================= 🚀 測試網頁爬蟲技能 =================
 # 我們給它一個真實的網址，看它會不會主動去爬
-inputs = {"messages": [("user", "幫我看一下這個網頁的內容在寫什麼：https://cg.originmood.com/NewsContent/zh_TW/mlbb_news_17394.html")]}
+if __name__ == "__main__":
+    inputs = {"messages": [("user", "幫我看一下這個網頁的內容在寫什麼：https://cg.originmood.com/NewsContent/zh_TW/mlbb_news_17394.html")]}
 
-print("--- LangGraph 雙技能測試開始 ---")
-for output in app.stream(inputs, stream_mode="values"):
-    last_message = output["messages"][-1]
-    print(f"\n[{last_message.type.upper()}]:")
-    if last_message.content:
-        print(last_message.content)
-    else:
-        print(f"(呼叫工具: {last_message.tool_calls[0]['name']}, 參數: {last_message.tool_calls[0]['args']})")
+    print("--- LangGraph 雙技能測試開始 ---")
+    for output in app.stream(inputs, stream_mode="values"):
+        last_message = output["messages"][-1]
+        print(f"\n[{last_message.type.upper()}]:")
+        if last_message.content:
+            print(last_message.content)
+        else:
+            print(f"(呼叫工具: {last_message.tool_calls[0]['name']}, 參數: {last_message.tool_calls[0]['args']})")
