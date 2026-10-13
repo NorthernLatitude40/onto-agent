@@ -49,6 +49,8 @@ dependencies = [
     "modal>=1.5.5",
     "gradio>=6.26.0",
     "spaces>=0.51.3",
+    "langchain-ollama>=1.1.0",
+    "beautifulsoup4>=4.15.0",
 ]
 
 [dependency-groups]

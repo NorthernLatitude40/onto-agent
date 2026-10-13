@@ -2,6 +2,7 @@ import logging
 import time
 import uuid
 import traceback
+import os
 from datetime import datetime, timedelta
 from typing import Optional, List, Annotated
 
@@ -13,12 +14,16 @@ from pydantic import BaseModel, Field
 from src.service.inventory_service import InventoryService
 from src.service.financial_service import FinancialService
 from src.common.database import SessionLocal, Base, engine
+
 from src.model.models import FinancialRecord
 from src.model.inventory_model import InventoryModel
 from src.model.order_model import OutboundOrderModel as OutboundOrder
 from src.model.order_item_model import OutboundOrderItem
 from src.model.tools_schema import QueryShopDataInput
 from src.model.rfc_7807_schema import ProblemDetails
+from langchain_ollama import OllamaEmbeddings
+import psycopg2
+from pgvector.psycopg2 import register_vector
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -427,9 +432,115 @@ def query_shop_data(
     finally:
         db.close()
 
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+def get_db_connection():
+    """获取同步数据库连接并注册 pgvector"""
+    conn = psycopg2.connect(DATABASE_URL)
+    register_vector(conn)
+    return conn
+
+def get_embedding(text: str) -> List[float]:
+    """生成查询文本的 Embedding 向量"""
+    embeddings = OllamaEmbeddings(
+    model="nomic-embed-text",
+    base_url="http://host.docker.internal:11435"
+)
+    return embeddings.embed_query(text)
+
+@tool
+def search_knowledge_base(query: str) -> str:
+    """查询房车租赁攻略、FAQ、旅游笔记和车辆使用指南等非结构化知识库。当用户询问租车注意事项、旅行建议或车辆特性时调用此工具。"""
+    try:
+        query_embedding = get_embedding(query)
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # 使用 pgvector 计算余弦距离获取最相关的 3 个切片
+        cur.execute(
+            """
+            SELECT title, content, 1 - (embedding <=> %s::vector) AS similarity
+            FROM rag_documents
+            ORDER BY embedding <=> %s::vector
+            LIMIT 3;
+            """,
+            (query_embedding, query_embedding)
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        if not rows:
+            return "没有找到相关的知识库文章。"
+            
+        results = []
+        for title, content, similarity in rows:
+            results.append(f"【标题】{title} (相似度: {float(similarity):.2f})\n【内容】{content}")
+            
+        return "\n\n---\n\n".join(results)
+        
+    except Exception as e:
+        return f"知识库检索出错: {str(e)}"
+
+
+@tool
+def search_campervan_pricing(model_name: str, pickup_date: str, return_date: str) -> str:
+    """查询指定车型在特定取车日期和还车日期的价格、载客量及库存可用状态。当用户询问具体的车型价格、日期预订或是否有空车时调用此工具。
+    
+    参数说明:
+    - model_name: 车型关键词（例如 'Toyota Hiace'）
+    - pickup_date: 取车日期，格式为 YYYY-MM-DD
+    - return_date: 还车日期，格式为 YYYY-MM-DD
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # 联合查询 van_models 和 pricing_inventory
+        query = """
+            SELECT 
+                m.model_name, 
+                m.berths, 
+                m.transmission, 
+                p.price_nzd, 
+                p.is_available,
+                p.pickup_date,
+                p.return_date
+            FROM pricing_inventory p
+            JOIN van_models m ON p.model_id = m.id
+            WHERE m.model_name ILIKE %s
+              AND p.pickup_date <= %s::date
+              AND p.return_date >= %s::date
+            LIMIT 5;
+        """
+        
+        logger.info(f"Executing SQL query: {query}")
+        logger.info(f"With parameters: %{model_name}%, {pickup_date}, {return_date}")
+        cur.execute(query, (f"%{model_name}%", pickup_date, return_date))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        if not rows:
+            return f"没有找到符合条件 '{model_name}' 在 {pickup_date} 至 {return_date} 期间的库存或价格记录。"
+            
+        results = []
+        for name, berths, trans, price, available, p_date, r_date in rows:
+            status = "有库存/可预订" if available else "已满/不可预订"
+            results.append(
+                f"车型: {name} | 载客数: {berths}人 | 变速箱: {trans} | "
+                f"时段: {p_date} 至 {r_date} | 价格: {price} NZD | 状态: {status}"
+            )
+            
+        return "\n".join(results)
+        
+    except Exception as e:
+        return f"价格与库存查询出错: {str(e)}"
+
 
 # 工具导出列表（用于绑定给 Gemini / LangChain）
-tools = [add_device, sell_device, query_shop_data]
+tools = [add_device, sell_device, query_shop_data, search_campervan_pricing, search_knowledge_base]
 
 
 if __name__ == "__main__":
