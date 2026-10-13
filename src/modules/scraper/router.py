@@ -1,6 +1,6 @@
 import random
 from fastapi import APIRouter, HTTPException
-from modules.scraper.service import ScraperService
+from src.modules.scraper.service import ScraperService
 
 router = APIRouter(prefix="/api/scraper", tags=["爬蟲與數據聚合"])
 
