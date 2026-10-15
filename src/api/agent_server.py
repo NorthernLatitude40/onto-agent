@@ -10,7 +10,6 @@ from src.common.exceptions import BusinessException, register_exception_handlers
 from fastapi.middleware.cors import CORSMiddleware
 from src.config.config import settings
 from src.api.v1.router import api_v1_router
-from src.modules.scraper.router import router as scraper_router
 
 # ⚙️ 1. 初始化全局统一日志（只在入口调用一次）
 setup_logging()
@@ -134,7 +133,6 @@ def create_api(harness) -> FastAPI:
     app.include_router(dashboard_router)
     app.include_router(shop_router)
     app.include_router(auth_router)
-    app.include_router(scraper_router)
 
     logger.info("✅ Agent Harness API Gateway 挂载完成")
     return app

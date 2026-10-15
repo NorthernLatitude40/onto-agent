@@ -18,7 +18,7 @@ from src.common.database_restful import supabase
 
 from src.core.llm_router import router
 from src.core.shop_agent.prompts import SHOP_SYSTEM_PROMPT
-from src.core.shop_agent.tools import add_device, query_shop_data, sell_device, search_campervan_pricing, search_knowledge_base
+from src.core.shop_agent.tools import add_device, query_shop_data, sell_device, search_campervan_pricing, search_knowledge_base, query_vehicles
 from src.core.voyager_agent.skill_library import SkillLibrary
 from ..strategies.base import BaseAgentStrategy
 from src.common.redis_client import redis_client
@@ -175,12 +175,15 @@ class ShopAgentStrategy(BaseAgentStrategy):
         store_name = (
             _get(shop_obj, "name") if shop_obj else f"店鋪 ({shop_id})"
         )
+        # 提取行业领域信息
+        industry = _get(shop_obj, "industry", "房车租赁")  # 默认值为"房车租赁"
 
         return {
             "user_id": str(user_id),
             "user_name": str(user_name),
             "role": str(role),
             "store_name": str(store_name),
+            "industry": str(industry),
         }
 
     def _create_graph_structure_tool(self) -> BaseTool:
@@ -215,12 +218,13 @@ class ShopAgentStrategy(BaseAgentStrategy):
 
         # 3. 組裝 Tool 集
         local_tools = [
-            add_device,
-            sell_device,
-            query_shop_data,
-            graph_structure_tool,
-            voyager_queue_tool,
-            search_campervan_pricing, 
+            # add_device,
+            # sell_device,
+            # query_shop_data,
+            query_vehicles,
+            # graph_structure_tool,
+            # voyager_queue_tool,
+            search_campervan_pricing,
             search_knowledge_base,
         ]
         all_tools = local_tools + dynamic_skill_tools + list(mcp_tools)

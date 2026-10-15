@@ -9,6 +9,8 @@ from src.api.v1.endpoints.partner_api import router as partner_router
 from src.api.v1.endpoints.inventory_api import router as inventory_router
 from src.api.v1.endpoints.purchase_api import router as purchase_router
 from src.api.v1.endpoints.dict_api import router as dict_router
+from src.api.v1.endpoints.scraper_api import router as scraper_router
+from src.modules.scraper.router import router as game_router
 
 # 2. 創建 V1 版本的 API 總路由
 api_v1_router = APIRouter(prefix="/api/v1")
@@ -51,7 +53,19 @@ api_v1_router.include_router(
 )
 
 api_v1_router.include_router(
-    dict_router,  
+    dict_router,
     prefix="/dicts",
     tags=["字典管理"]
+)
+
+api_v1_router.include_router(
+    scraper_router,
+    prefix="/vehicles",
+    tags=["車輛数据抓取"]
+)
+
+api_v1_router.include_router(
+    game_router,
+    prefix="/scraper",
+    tags=["游戲数据抓取"]
 )
