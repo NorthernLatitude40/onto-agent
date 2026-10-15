@@ -3,9 +3,22 @@
 myenv12/
 __pycache__/
 *.pyc
+*.egg-info/
+**/ontoagent.egg-info/
 
-# Environment
+# Environment & Secrets
 .env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+
+# Databases & Storage
+*.db
+*.sqlite
+*.sqlite3
+test_unit.db
 
 # VSCode
 .vscode/
@@ -16,15 +29,32 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
-
-# txt
-*.log
-
-# 忽略所有 Windows 備用資料流標記
 *Zone.Identifier
 
-.override.yml
+# Logs & Output
+*.log
+logs/
 
-*.pem
+# AI Generated Summaries & Refactoring Docs (避免提交過程文件與重構總結)
+*_SUMMARY.md
+*_REFACTORING.md
+REFACTORING_SUMMARY.md
 
-**/ontoagent.egg-info/
+# Open Source / Collaboration Templates (若為私人專案不需要)
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+SECURITY.md
+
+# Docker Overrides & Local Configs
+docker-compose.override.yml
+*.override.yml
+*.local.yml
+
+# 鎖死所有真實環境變數檔
+.env
+.env.local
+.env.*.local
+
+# 鎖死所有 SQLite 資料庫
+*.db
+*.sqlite
