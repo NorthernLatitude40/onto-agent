@@ -4,14 +4,16 @@ Provides RESTful API for frontend to configure and trigger vehicle data scraping
 """
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-import requests
-from bs4 import BeautifulSoup
-import psycopg2
 import os
 from dotenv import load_dotenv
 from typing import List, Optional
+import psycopg2
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 load_dotenv()
+
+# Import service for scrape execution logic
+from src.service.scraper_service import ScraperService
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -179,8 +181,8 @@ def create_scraper_config(config_data: ScraperConfigCreate):
         conn.commit()
         
         # Return the created configuration
-        # Parse headers JSON string back to dict
-        headers_dict = json.loads(result[3]) if result[3] and result[3] != 'null' else None
+        # Parse headers JSON string back to dict (only if it's a string)
+        headers_dict = json.loads(result[3]) if result[3] and isinstance(result[3], str) and result[3] != 'null' else result[3]
         config_response = {
             "id": result[0],
             "name": result[1],
@@ -247,11 +249,15 @@ def get_scraper_config(config_id: int):
                 detail=f"爬虫配置 ID {config_id} 不存在"
             )
         
+        # Parse headers JSON string back to dict (only if it's a string)
+        import json
+        headers_dict = json.loads(result[3]) if result[3] and isinstance(result[3], str) and result[3] != 'null' else result[3]
+        
         config = {
             "id": result[0],
             "name": result[1],
             "target_url": result[2],
-            "headers": result[3],
+            "headers": headers_dict,
             "timeout": result[4],
             "is_active": result[5],
             "created_at": str(result[6]) if result[6] is not None else None,
@@ -347,11 +353,15 @@ def update_scraper_config(config_id: int, config_data: ScraperConfigUpdate):
         conn.commit()
         
         # Return the updated configuration
+        # Parse headers JSON string back to dict (only if it's a string)
+        import json
+        headers_dict = json.loads(result[3]) if result[3] and isinstance(result[3], str) and result[3] != 'null' else result[3]
+        
         config_response = {
             "id": result[0],
             "name": result[1],
             "target_url": result[2],
-            "headers": result[3],
+            "headers": headers_dict,
             "timeout": result[4],
             "is_active": result[5],
             "created_at": str(result[6]) if result[6] is not None else None,
@@ -429,14 +439,16 @@ def delete_scraper_config(config_id: int):
 
 # ==================== Scrape Execution Endpoints ====================
 
+# Initialize scraper service
+scraper_service = ScraperService()
+
 @router.post(
     "/scrape/execute",
-    response_model=ScrapeResponse,
     status_code=status.HTTP_200_OK,
     summary="执行爬虫任务",
     description="根据选择的配置ID执行爬虫任务并返回结果"
 )
-def execute_scrape(config_request: ExecuteScrapeRequest):
+def execute_scrape(config_request: ExecuteScrapeRequest, background_tasks: BackgroundTasks):
     """
     执行爬虫任务
     
@@ -448,267 +460,18 @@ def execute_scrape(config_request: ExecuteScrapeRequest):
     Returns:
         ScrapeResponse: 爬虫任务结果
     """
-    # Load configuration from database
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT target_url, headers, timeout
-            FROM scraper_configs
-            WHERE id = %s AND is_active = TRUE;
-        """, (config_request.config_id,))
-        
-        result = cur.fetchone()
-        if result is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"爬虫配置 ID {config_request.config_id} 不存在或已禁用"
-            )
-        
-        target_url = result[0]
-        headers_data = result[1]
-        timeout = result[2]
-        
-    except Exception as e:
-        print(f"数据库查询出错: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"数据库查询失败: {str(e)}"
-        )
-    finally:
-        if 'cur' in locals():
-            cur.close()
-        if 'conn' in locals():
-            conn.close()
-    
-    # Use the loaded configuration to execute scrape
-    headers = headers_data or {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    print(f"正在访问目标网站抓取车型数据: {target_url} ...")
-    
-    try:
-        response = requests.get(target_url, headers=headers, timeout=timeout)
-        response.raise_for_status()
-    except Exception as e:
-        print(f"网络请求失败: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"无法访问目标网站: {str(e)}"
-        )
-    
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # 示例解析逻辑：实际开发中需要根据 getlostinnz.co.nz 页面的实际 HTML 结构
-    # 调整 CSS 选择器（例如 soup.select('.vehicle-card') 等）
-    
-    # 模拟解析出结构化车辆列表
-    scraped_vehicles = [
-        {
-            "model_name": "Toyota Hiace 2-Berth Campervan",
-            "berths": 2,
-            "transmission": "Automatic",
-            "specs": {"solar": True, "battery": "100Ah", "heater": "Diesel", "bed": "Double bed"},
-            "price_nzd": 175.00,
-            "pickup_date": "2026-11-01",
-            "return_date": "2026-11-10"
-        },
-        {
-            "model_name": "Ford Transit 4-Berth Motorhome",
-            "berths": 4,
-            "transmission": "Manual",
-            "specs": {"solar": False, "battery": "200Ah", "heater": "Electric", "bed": "2 Double beds"},
-            "price_nzd": 240.00,
-            "pickup_date": "2026-11-01",
-            "return_date": "2026-11-10"
+        background_tasks.add_task(scraper_service.execute_scrape, config_request.config_id)
+
+        # 立即回傳給前端，前端不會發生 Timeout 斷線
+        return {
+            "success": True,
+            "message": (
+                f"ID 為 {config_request.config_id} 的爬蟲任務已在背景啟動，請稍後查看資料庫與日誌。"
+            ),
         }
-    ]
-    
-    print(f"成功解析到 {len(scraped_vehicles)} 辆车型数据，开始写入数据库...")
-    
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        
-        for v in scraped_vehicles:
-            # 写入或更新 van_models 表
-            import json
-            specs_json = json.dumps(v["specs"])
-            
-            cur.execute(
-                """
-                INSERT INTO van_models (model_name, berths, transmission, specs)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id;
-                """,
-                (
-                    v["model_name"],
-                    v["berths"],
-                    v["transmission"],
-                    specs_json
-                )
-            )
-            result = cur.fetchone()
-            if result is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to get model_id after insertion"
-                )
-            model_id = result[0]
-            
-            # 写入 pricing_inventory 表
-            cur.execute(
-                """
-                INSERT INTO pricing_inventory (model_id, pickup_date, return_date, price_nzd, is_available)
-                VALUES (%s, %s, %s, %s, TRUE);
-                """,
-                (model_id, v["pickup_date"], v["return_date"], v["price_nzd"])
-            )
-        
-        conn.commit()
-        print("🎉 结构化车型与价格数据已成功入库！")
-        
     except Exception as e:
-        if 'conn' in locals():
-            conn.rollback()
-        print(f"数据库写入出错: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"数据库操作失败: {str(e)}"
-        )
-    finally:
-        if 'cur' in locals():
-            cur.close()
-        if 'conn' in locals():
-            conn.close()
-    
-    return {
-        "success": True,
-        "count": len(scraped_vehicles),
-        "message": f"成功抓取并存储 {len(scraped_vehicles)} 辆车型数据",
-        "vehicles": scraped_vehicles
-    }
-    """
-    抓取并存储车型数据
-    
-    该接口接受抓取配置，从目标网站抓取车型数据（模拟或实际解析），
-    并将结构化数据存储到数据库中。
-    
-    Returns:
-        ScrapeResponse: 包含抓取结果的响应
-    """
-    target_url = config.target_url or "https://getlostinnz.co.nz/"
-    headers = config.headers or {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    timeout = config.timeout or 10
-    
-    print(f"正在访问目标网站抓取车型数据: {target_url} ...")
-    
-    try:
-        response = requests.get(target_url, headers=headers, timeout=timeout)
-        response.raise_for_status()
-    except Exception as e:
-        print(f"网络请求失败: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"无法访问目标网站: {str(e)}"
-        )
-    
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # 示例解析逻辑：实际开发中需要根据 getlostinnz.co.nz 页面的实际 HTML 结构
-    # 调整 CSS 选择器（例如 soup.select('.vehicle-card') 等）
-    
-    # 模拟解析出结构化车辆列表
-    scraped_vehicles = [
-        {
-            "model_name": "Toyota Hiace 2-Berth Campervan",
-            "berths": 2,
-            "transmission": "Automatic",
-            "specs": {"solar": True, "battery": "100Ah", "heater": "Diesel", "bed": "Double bed"},
-            "price_nzd": 175.00,
-            "pickup_date": "2026-11-01",
-            "return_date": "2026-11-10"
-        },
-        {
-            "model_name": "Ford Transit 4-Berth Motorhome",
-            "berths": 4,
-            "transmission": "Manual",
-            "specs": {"solar": False, "battery": "200Ah", "heater": "Electric", "bed": "2 Double beds"},
-            "price_nzd": 240.00,
-            "pickup_date": "2026-11-01",
-            "return_date": "2026-11-10"
-        }
-    ]
-    
-    print(f"成功解析到 {len(scraped_vehicles)} 辆车型数据，开始写入数据库...")
-    
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        
-        for v in scraped_vehicles:
-            # 写入或更新 van_models 表
-            # Convert specs to JSON string for PostgreSQL
-            import json
-            specs_json = json.dumps(v["specs"])
-            
-            cur.execute(
-                """
-                INSERT INTO van_models (model_name, berths, transmission, specs)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id;
-                """,
-                (
-                    v["model_name"],
-                    v["berths"],
-                    v["transmission"],
-                    specs_json
-                )
-            )
-            result = cur.fetchone()
-            if result is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to get model_id after insertion"
-                )
-            model_id = result[0]
-            
-            # 写入 pricing_inventory 表
-            cur.execute(
-                """
-                INSERT INTO pricing_inventory (model_id, pickup_date, return_date, price_nzd, is_available)
-                VALUES (%s, %s, %s, %s, TRUE);
-                """,
-                (model_id, v["pickup_date"], v["return_date"], v["price_nzd"])
-            )
-        
-        conn.commit()
-        print("🎉 结构化车型与价格数据已成功入库！")
-        
-    except Exception as e:
-        if 'conn' in locals():
-            conn.rollback()
-        print(f"数据库写入出错: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"数据库操作失败: {str(e)}"
-        )
-    finally:
-        if 'cur' in locals():
-            cur.close()
-        if 'conn' in locals():
-            conn.close()
-    
-    return {
-        "success": True,
-        "count": len(scraped_vehicles),
-        "message": f"成功抓取并存储 {len(scraped_vehicles)} 辆车型数据",
-        "vehicles": scraped_vehicles
-    }
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get(
     "/scrape/vehicles",
@@ -811,3 +574,4 @@ def get_stored_vehicles():
             conn.close()
     
     return vehicles
+
