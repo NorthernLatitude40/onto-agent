@@ -98,7 +98,7 @@ def get_scraper_configs():
         
         # 查询所有活跃的爬虫配置
         cur.execute("""
-            SELECT id, name, target_url, is_active, created_at
+            SELECT id, name, target_url, is_active, mode, created_at
             FROM scraper_configs
             WHERE is_active = TRUE
             ORDER BY name;
@@ -111,7 +111,8 @@ def get_scraper_configs():
                 "name": row[1],
                 "target_url": row[2],
                 "is_active": row[3],
-                "created_at": str(row[4]) if row[4] is not None else None
+                "mode": str(row[4]),
+                "created_at": str(row[5]) if row[5] is not None else None
             }
             configs.append(config_data)
         
@@ -159,15 +160,16 @@ def create_scraper_config(config_data: ScraperConfigCreate):
         # Insert new configuration
         cur.execute(
             """
-            INSERT INTO scraper_configs (name, target_url, headers, timeout)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id, name, target_url, headers, timeout, is_active, created_at, updated_at;
+            INSERT INTO scraper_configs (name, target_url, headers, timeout, mode)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, name, target_url, headers, timeout, is_active, mode, created_at, updated_at;
             """,
             (
                 config_data.name,
                 config_data.target_url,
                 headers_json,
-                config_data.timeout
+                config_data.timeout,
+                config_data.mode
             )
         )
         
@@ -190,8 +192,9 @@ def create_scraper_config(config_data: ScraperConfigCreate):
             "headers": headers_dict,
             "timeout": result[4],
             "is_active": result[5],
-            "created_at": str(result[6]) if result[6] is not None else None,
-            "updated_at": str(result[7]) if result[7] is not None else None
+            "mode": str(result[6]),
+            "created_at": str(result[7]) if result[7] is not None else None,
+            "updated_at": str(result[8]) if result[8] is not None else None
         }
         
     except Exception as e:
@@ -237,7 +240,7 @@ def get_scraper_config(config_id: int):
         
         # Query specific configuration
         cur.execute("""
-            SELECT id, name, target_url, headers, timeout, is_active, created_at, updated_at
+            SELECT id, name, target_url, headers, timeout, is_active, mode, created_at, updated_at
             FROM scraper_configs
             WHERE id = %s;
         """, (config_id,))
@@ -260,8 +263,9 @@ def get_scraper_config(config_id: int):
             "headers": headers_dict,
             "timeout": result[4],
             "is_active": result[5],
-            "created_at": str(result[6]) if result[6] is not None else None,
-            "updated_at": str(result[7]) if result[7] is not None else None
+            "mode": str(result[6]),
+            "created_at": str(result[7]) if result[7] is not None else None,
+            "updated_at": str(result[8]) if result[8] is not None else None
         }
         
     except Exception as e:
@@ -338,7 +342,7 @@ def update_scraper_config(config_id: int, config_data: ScraperConfigUpdate):
             UPDATE scraper_configs
             SET {updates}
             WHERE id = %s
-            RETURNING id, name, target_url, headers, timeout, is_active, created_at, updated_at;
+            RETURNING id, name, target_url, headers, timeout, is_active, mode, created_at, updated_at;
         """.format(updates=", ".join(updates))
         
         cur.execute(query, params)
@@ -364,8 +368,9 @@ def update_scraper_config(config_id: int, config_data: ScraperConfigUpdate):
             "headers": headers_dict,
             "timeout": result[4],
             "is_active": result[5],
-            "created_at": str(result[6]) if result[6] is not None else None,
-            "updated_at": str(result[7]) if result[7] is not None else None
+            "mode": str(result[6]),
+            "created_at": str(result[7]) if result[7] is not None else None,
+            "updated_at": str(result[8]) if result[8] is not None else None
         }
         
     except Exception as e:
@@ -461,7 +466,13 @@ def execute_scrape(config_request: ExecuteScrapeRequest, background_tasks: Backg
         ScrapeResponse: 爬虫任务结果
     """
     try:
-        background_tasks.add_task(scraper_service.execute_scrape, config_request.config_id)
+        # Use asyncio.run to execute the async function in the background task
+        import asyncio
+        
+        async def run_execute_scrape():
+            await scraper_service.execute_scrape(config_request.config_id, mode=config_request.mode)
+        
+        background_tasks.add_task(run_execute_scrape)
 
         # 立即回傳給前端，前端不會發生 Timeout 斷線
         return {
@@ -574,4 +585,5 @@ def get_stored_vehicles():
             conn.close()
     
     return vehicles
+
 

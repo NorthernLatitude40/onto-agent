@@ -51,6 +51,7 @@ dependencies = [
     "spaces>=0.51.3",
     "langchain-ollama>=1.1.0",
     "beautifulsoup4>=4.15.0",
+    "playwright>=1.64.0",
 ]
 
 [dependency-groups]

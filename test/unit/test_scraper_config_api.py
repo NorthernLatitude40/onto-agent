@@ -72,6 +72,7 @@ def test_create_scraper_config(test_client):
             '{"User-Agent": "Test Agent"}',  # headers (JSON string)
             15,  # timeout
             True,  # is_active
+            "api",  # mode
             None,  # created_at
             None   # updated_at
         ]
@@ -91,6 +92,7 @@ def test_create_scraper_config(test_client):
         assert data["target_url"] == "https://getlostinnz.co.nz/"
         assert data["timeout"] == 15
         assert data["is_active"] is True
+        assert data["mode"] == "api"
         assert "id" in data
 
 
@@ -104,7 +106,7 @@ def test_get_scraper_configs_with_data(test_client):
         mock_conn.cursor.return_value = mock_cursor
         
         # Mock the SELECT query to return multiple configs
-        # Note: The actual query only selects id, name, target_url, is_active, created_at
+        # Note: The actual query selects id, name, target_url, is_active, mode, created_at
         mock_cursor.execute.return_value = None
         mock_cursor.fetchall.return_value = [
             [
@@ -112,6 +114,7 @@ def test_get_scraper_configs_with_data(test_client):
                 "GetLost NZ Campervans",  # name
                 "https://getlostinnz.co.nz/",  # target_url
                 True,  # is_active
+                "api",  # mode
                 None   # created_at
             ],
             [
@@ -119,6 +122,7 @@ def test_get_scraper_configs_with_data(test_client):
                 "Another Scraper",  # name
                 "https://another-site.com/",  # target_url
                 True,  # is_active
+                "html",  # mode
                 None   # created_at
             ]
         ]
@@ -132,5 +136,9 @@ def test_get_scraper_configs_with_data(test_client):
         assert data[0]["name"] == "GetLost NZ Campervans"
         assert data[0]["target_url"] == "https://getlostinnz.co.nz/"
         assert data[0]["is_active"] is True
+        assert data[0]["mode"] == "api"
         assert data[1]["id"] == 2
         assert data[1]["name"] == "Another Scraper"
+        assert data[1]["target_url"] == "https://another-site.com/"
+        assert data[1]["is_active"] is True
+        assert data[1]["mode"] == "html"

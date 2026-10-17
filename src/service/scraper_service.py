@@ -13,6 +13,18 @@ import time
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException, status
 
+# Import Scrapling framework
+# Import Scrapling framework (optional)
+try:
+    from scrapling import Selector  # type: ignore
+    SCRAPLING_AVAILABLE = True
+except ImportError:
+    SCRAPLING_AVAILABLE = False
+    print("Scrapling framework not available")
+
+# Import Playwright scraper
+from .playwright_scraper import PlaywrightScraper
+
 load_dotenv()
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -21,12 +33,17 @@ class ScraperService:
     """
     Service class for handling vehicle scraping operations.
     Encapsulates the business logic for executing scrape tasks.
+    
+    Supports multiple scraping frameworks:
+    - requests (default)
+    - scrapling (if available)
+    - playwright
     """
     
     def __init__(self):
-        pass
+        self.playwright_scraper = PlaywrightScraper()
     
-    def execute_scrape(self, config_id: int) -> Optional[Dict[str, Any]]:
+    async def execute_scrape(self, config_id: int, mode: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Execute a vehicle scraping task using the specified configuration.
         
@@ -37,6 +54,7 @@ class ScraperService:
         
         Args:
             config_id: The ID of the scraper configuration to use
+            mode: Optional override for scraping mode (html/api/playwright)
             
         Returns:
             Dict containing scrape results with success status, count, message, and vehicles list
@@ -48,10 +66,214 @@ class ScraperService:
         config_data = self._load_scraper_config(config_id)
         headers_data = config_data["headers"]
         timeout = config_data["timeout"]
+        scraper_type = config_data.get("scraper_type", "requests")  # Default to requests
 
+        scraped_vehicles = []
+        
+        try:
+            if scraper_type == "scrapling" and SCRAPLING_AVAILABLE:
+                # Use Scrapling framework
+                scraped_vehicles = self._scrape_with_scrapling(timeout)
+            elif scraper_type == "playwright":
+                # Use Playwright scraper
+                # Try using Scrapling framework if available, otherwise use execute_scrape
+                scrape_result = await self.playwright_scraper.scrape_with_scrapling(config_data)
+                if scrape_result and "vehicles" in scrape_result:
+                    scraped_vehicles = scrape_result["vehicles"]
+                else:
+                    # Fallback to original execute_scrape method
+                    scrape_result = await self.playwright_scraper.execute_scrape(config_data)
+                    if scrape_result and "vehicles" in scrape_result:
+                        scraped_vehicles = scrape_result["vehicles"]
+                    else:
+                        scraped_vehicles = []
+            else:
+                # Use requests (default)
+                scraped_vehicles = self._scrape_with_requests(timeout)
+        
+        except Exception as api_error:
+            print(f"API 调用错误: {api_error}")
+            scraped_vehicles = []
+        
+        if not scraped_vehicles:
+            return {
+                "success": False,
+                "count": 0,
+                "message": "未能抓取到任何车型数据",
+                "vehicles": []
+            }
+        
+        print(f"成功解析到 {len(scraped_vehicles)} 辆车型数据，开始写入数据库...")
+        
+        # Split data into multiple files if exceeding 400 rows
+        if len(scraped_vehicles) > 400:
+            self._split_and_store_scraped_vehicles(scraped_vehicles)
+        else:
+            self._store_scraped_vehicles(scraped_vehicles)
+        
+        return {
+            "success": True,
+            "count": len(scraped_vehicles),
+            "message": f"成功抓取并存储 {len(scraped_vehicles)} 辆车型数据",
+            "vehicles": scraped_vehicles
+        }
+    
+    def _scrape_with_scrapling(self, timeout: int) -> List[Dict[str, Any]]:
+        """
+        Scrape vehicle data using the Scrapling framework.
+        
+        Args:
+            timeout: Request timeout in seconds
+            
+        Returns:
+            List of scraped vehicle dictionaries
+        """
+        if not SCRAPLING_AVAILABLE:
+            raise RuntimeError("Scrapling framework is not available")
+        
+        print("[+] 使用 Scrapling 框架进行数据抓取...")
+        
+        # Create a requests session for HTTP calls
         session = requests.Session()
-
-        # 設定基本的模擬瀏覽器 Headers
+        
+        base_url = "https://getlostinnz.co.nz/"
+        step2_url = "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/step2"
+        step3_url = "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/step3"
+        calctotal_url = "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/calctotal"
+        
+        # Define common request parameters
+        common_params = {
+            "pickupdate": "2026-11-10",
+            "dropoffdate": "2026-12-17",
+            "ageid": 9,
+            "pickuplocationid": 1,
+            "dropofflocationid": 1,
+            "pickuptime": "10:00",
+            "dropofftime": "10:00",
+            "vehiclecategorytypeid": 2,
+            "location_key": "christchurch",
+            "gl_location": "christchurch"
+        }
+        
+        scraped_vehicles = []
+        
+        # Step 1: Get nonce from homepage
+        print("[-] 正在訪問首頁以初始化 Session 並獲取 Cookie...")
+        response = session.get(base_url, timeout=timeout)
+        if response.status_code != 200:
+            print(f"[!] 訪問首頁失敗，狀態碼: {response.status_code}")
+            return []
+        
+        print("[+] 首頁訪問成功！已自動取得 Cookie。")
+        
+        # Extract nonce from page content
+        nonce_match = re.search(r'"nonce"\s*:\s*"([a-f0-9]+)"', response.text)
+        if not nonce_match:
+            print("[!] 未能抓取到 Nonce，請檢查頁面結構是否變動")
+            return []
+        
+        nonce = nonce_match.group(1)
+        print(f"[+] 成功動態獲取 Nonce: {nonce}")
+        
+        # Set headers for API requests
+        headers = {
+            "Referer": base_url,
+            "Origin": "https://getlostinnz.co.nz",
+            "Content-Type": "application/json",
+            "x-wp-nonce": nonce,
+        }
+        
+        # Add rate limiting with random delay
+        delay = random.uniform(1.0, 3.0)
+        print(f"等待 {delay:.2f} 秒以避免速率限制...")
+        time.sleep(delay)
+        
+        # Step 2: Get vehicle list
+        print("正在访问目标网站抓取车型数据...")
+        response = session.post(step2_url, json=common_params, headers=headers, timeout=timeout)
+        if response.status_code != 200:
+            print(f"[!] Step2 API 调用失败，状态码: {response.status_code}")
+            return []
+        
+        vehicles_data = response.json()
+        print("Step2 原始回應：", vehicles_data)
+        
+        # Step 3: Get vehicle details and prices
+        for vehicle in vehicles_data.get("cars", []):
+            step3_params = common_params.copy()
+            step3_params["vehiclecategoryid"] = vehicle.get("vehiclecategoryid", 2)
+            
+            # Get vehicle details
+            response = session.post(step3_url, json=step3_params, headers=headers, timeout=timeout)
+            if response.status_code != 200:
+                print(f"[!] Step3 API 调用失败，状态码: {response.status_code}")
+                continue
+            
+            vehicle_details = response.json()
+            
+            # Calculate price
+            calctotal_params = {
+                "pickupdate": common_params["pickupdate"],
+                "pickuplocationid": common_params["pickuplocationid"],
+                "vehiclecategoryid": vehicle.get("vehiclecategoryid", 2),
+                "numberofdays": vehicle.get("numberofdays", 8),
+                "totalrateafterdiscount": vehicle.get("totalrateafterdiscount", 1400),
+                "totalratebeforediscount": vehicle.get("totalratebeforediscount", 1400),
+                "freedaysamount": 0,
+                "insuranceid": 0,
+                "extrakmsid": 0,
+                "optionalfeeamounts": [],
+                "mandatoryfeeamounts": [49],
+                "coupon": "",
+                "campaigncode": "",
+                "rental_discount": 0,
+                "discount_name": "",
+            }
+            
+            response = session.post(calctotal_url, json=calctotal_params, headers=headers, timeout=timeout)
+            if response.status_code != 200:
+                print(f"[!] Calctotal API 调用失败，状态码: {response.status_code}")
+                continue
+            
+            price_data = response.json()
+            
+            # Create vehicle entry
+            specs = {
+                "solar": vehicle_details.get("solar", False),
+                "battery": vehicle_details.get("battery", "Unknown"),
+                "heater": vehicle_details.get("heater", "Unknown"),
+                "bed": vehicle_details.get("bed", "Unknown"),
+            }
+            
+            vehicle_entry = {
+                "model_name": vehicle.get("vehiclecategory", "Unknown Model"),
+                "berths": vehicle.get("numberofadults", 2),
+                "transmission": "Unknown",
+                "specs": specs,
+                "price_nzd": price_data.get("trip_total", 0.0),
+                "pickup_date": common_params["pickupdate"],
+                "return_date": common_params["dropoffdate"],
+            }
+            
+            scraped_vehicles.append(vehicle_entry)
+        
+        return scraped_vehicles
+    
+    def _scrape_with_requests(self, timeout: int) -> List[Dict[str, Any]]:
+        """
+        Scrape vehicle data using the requests library (original implementation).
+        
+        Args:
+            timeout: Request timeout in seconds
+            
+        Returns:
+            List of scraped vehicle dictionaries
+        """
+        print("[+] 使用 requests 库进行数据抓取...")
+        
+        session = requests.Session()
+        
+        # Set basic browser-like Headers
         session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
@@ -67,18 +289,19 @@ class ScraperService:
         response = session.get(base_url)
         if response.status_code != 200:
             print(f"[!] 訪問首頁失敗，狀態碼: {response.status_code}")
-            return None
+            return []
         print("[+] 首頁訪問成功！已自動取得 Cookie。")
-        # 2. 動態從首頁的 HTML 原始碼中用正規表達式抓取最新的 Nonce
-        nonce_match = re.search(r'"nonce"\s*:\s*"([a-f0-9]+)"', response.text)
-        if nonce_match:
-            nonce = nonce_match.group(1)
-            print(f"[+] 成功動態獲取 Nonce: {nonce}")
-        else:
-            print("[!] 未能抓取到 Nonce，請檢查頁面結構是否變動")
-            return
         
-        # 3. 設定 API 專屬的 Headers（將動態抓到的 nonce 帶入，Cookie 則由 session 自動管理夾帶）
+        # Extract nonce from HTML
+        nonce_match = re.search(r'"nonce"\s*:\s*"([a-f0-9]+)"', response.text)
+        if not nonce_match:
+            print("[!] 未能抓取到 Nonce，請檢查頁面結構是否變動")
+            return []
+        
+        nonce = nonce_match.group(1)
+        print(f"[+] 成功動態獲取 Nonce: {nonce}")
+        
+        # Set API-specific headers
         headers = {
             "Referer": base_url,
             "Origin": "https://getlostinnz.co.nz",
@@ -86,7 +309,7 @@ class ScraperService:
             "x-wp-nonce": nonce,
         }
         
-        # Define API endpoints from plans
+        # Define API endpoints
         step2_url = "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/step2"
         step3_url = "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/step3"
         calctotal_url = "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/calctotal"
@@ -107,115 +330,96 @@ class ScraperService:
         
         print(f"正在访问目标网站抓取车型数据...")
         
-        # Add rate limiting with random delay between requests
-        delay = random.uniform(1.0, 3.0)  # Random delay between 1 and 3 seconds
+        # Add rate limiting with random delay
+        delay = random.uniform(1.0, 3.0)
         print(f"等待 {delay:.2f} 秒以避免速率限制...")
         time.sleep(delay)
         
         scraped_vehicles = []
         
         try:
-          # Call step2 API to get vehicle list
-          step2_response = session.post(
-              step2_url, json=common_params, headers=headers
-          )
-          step2_response.raise_for_status()
-          vehicles_data = step2_response.json()
-
-          # 【建議加上這行除錯】檢查 step2 回傳的完整結構長怎樣
-          print("Step2 原始回應：", vehicles_data)
-
-          # Call step3 API to get vehicle details and calctotal for price
-          for vehicle in vehicles_data.get("cars", []):
-            step3_params = common_params.copy()
-            step3_params["vehiclecategoryid"] = vehicle.get(
-                "vehiclecategoryid", 2
+            # Call step2 API to get vehicle list
+            step2_response = session.post(
+                step2_url, json=common_params, headers=headers
             )
-
-            # 務必使用 session.post，才能延續前面取得的 Cookie 和 Session 狀態！
-            step3_response = session.post(
-                step3_url,
-                json=step3_params,
-                headers=headers,
-                timeout=timeout,
-            )
-            step3_response.raise_for_status()
-            vehicle_details = step3_response.json()
-
-            # Call calctotal API to calculate price
-            calctotal_params = {
-                "pickupdate": common_params["pickupdate"],
-                "pickuplocationid": common_params["pickuplocationid"],
-                "vehiclecategoryid": vehicle.get("vehiclecategoryid", 2),
-                "numberofdays": vehicle.get("numberofdays", 8),
-                "totalrateafterdiscount": vehicle.get(
-                    "totalrateafterdiscount", 1400
-                ),
-                "totalratebeforediscount": vehicle.get(
-                    "totalratebeforediscount", 1400
-                ),
-                "freedaysamount": 0,
-                "insuranceid": 0,
-                "extrakmsid": 0,
-                "optionalfeeamounts": [],
-                "mandatoryfeeamounts": [49],
-                "coupon": "",
-                "campaigncode": "",
-                "rental_discount": 0,
-                "discount_name": "",
-            }
-
-            # 同樣改用 session.post
-            calctotal_response = session.post(
-                calctotal_url,
-                json=calctotal_params,
-                headers=headers,
-                timeout=timeout,
-            )
-            calctotal_response.raise_for_status()
-            price_data = calctotal_response.json()
-
-            # Create vehicle entry
-            specs = {
-                "solar": vehicle_details.get("solar", False),
-                "battery": vehicle_details.get("battery", "Unknown"),
-                "heater": vehicle_details.get("heater", "Unknown"),
-                "bed": vehicle_details.get("bed", "Unknown"),
-            }
-
-            vehicle_entry = {
-                # 這裡將 "name" 改為 API 實際有的 "vehiclecategory"
-                "model_name": vehicle.get("vehiclecategory", "Unknown Model"),
-                # 如果沒有 berths，可以改用 numberofadults 或給預設值
-                "berths": vehicle.get("numberofadults", 2),
-                # 因為 API 沒給變速箱，若有需要可以從其他欄位補，或暫時給定/未知
-                "transmission": "Unknown",
-                "specs": specs,
-                "price_nzd": price_data.get("trip_total", 0.0),
-                "pickup_date": common_params["pickupdate"],
-                "return_date": common_params["dropoffdate"],
-            }
-
-            scraped_vehicles.append(vehicle_entry)
-
+            step2_response.raise_for_status()
+            vehicles_data = step2_response.json()
+            
+            print("Step2 原始回應：", vehicles_data)
+            
+            # Call step3 API to get vehicle details and calctotal for price
+            for vehicle in vehicles_data.get("cars", []):
+                step3_params = common_params.copy()
+                step3_params["vehiclecategoryid"] = vehicle.get(
+                    "vehiclecategoryid", 2
+                )
+                
+                step3_response = session.post(
+                    step3_url,
+                    json=step3_params,
+                    headers=headers,
+                    timeout=timeout,
+                )
+                step3_response.raise_for_status()
+                vehicle_details = step3_response.json()
+                
+                # Call calctotal API to calculate price
+                calctotal_params = {
+                    "pickupdate": common_params["pickupdate"],
+                    "pickuplocationid": common_params["pickuplocationid"],
+                    "vehiclecategoryid": vehicle.get("vehiclecategoryid", 2),
+                    "numberofdays": vehicle.get("numberofdays", 8),
+                    "totalrateafterdiscount": vehicle.get(
+                        "totalrateafterdiscount", 1400
+                    ),
+                    "totalratebeforediscount": vehicle.get(
+                        "totalratebeforediscount", 1400
+                    ),
+                    "freedaysamount": 0,
+                    "insuranceid": 0,
+                    "extrakmsid": 0,
+                    "optionalfeeamounts": [],
+                    "mandatoryfeeamounts": [49],
+                    "coupon": "",
+                    "campaigncode": "",
+                    "rental_discount": 0,
+                    "discount_name": "",
+                }
+                
+                calctotal_response = session.post(
+                    calctotal_url,
+                    json=calctotal_params,
+                    headers=headers,
+                    timeout=timeout,
+                )
+                calctotal_response.raise_for_status()
+                price_data = calctotal_response.json()
+                
+                # Create vehicle entry
+                specs = {
+                    "solar": vehicle_details.get("solar", False),
+                    "battery": vehicle_details.get("battery", "Unknown"),
+                    "heater": vehicle_details.get("heater", "Unknown"),
+                    "bed": vehicle_details.get("bed", "Unknown"),
+                }
+                
+                vehicle_entry = {
+                    "model_name": vehicle.get("vehiclecategory", "Unknown Model"),
+                    "berths": vehicle.get("numberofadults", 2),
+                    "transmission": "Unknown",
+                    "specs": specs,
+                    "price_nzd": price_data.get("trip_total", 0.0),
+                    "pickup_date": common_params["pickupdate"],
+                    "return_date": common_params["dropoffdate"],
+                }
+                
+                scraped_vehicles.append(vehicle_entry)
+        
         except Exception as api_error:
-          print(f"API 调用错误: {api_error}")
-          scraped_vehicles = []
+            print(f"API 调用错误: {api_error}")
+            return []
         
-        print(f"成功解析到 {len(scraped_vehicles)} 辆车型数据，开始写入数据库...")
-        
-        # Split data into multiple files if exceeding 400 rows
-        if len(scraped_vehicles) > 400:
-            self._split_and_store_scraped_vehicles(scraped_vehicles)
-        else:
-            self._store_scraped_vehicles(scraped_vehicles)
-        
-        return {
-            "success": True,
-            "count": len(scraped_vehicles),
-            "message": f"成功抓取并存储 {len(scraped_vehicles)} 辆车型数据",
-            "vehicles": scraped_vehicles
-        }
+        return scraped_vehicles
     
     def _load_scraper_config(self, config_id: int) -> Dict[str, Any]:
         """
@@ -225,7 +429,7 @@ class ScraperService:
             config_id: The ID of the configuration to load
             
         Returns:
-            Dictionary containing target_url, headers, and timeout
+            Dictionary containing target_url, headers, timeout, and scraper_type
             
         Raises:
             HTTPException: If configuration not found or database error occurs
@@ -235,7 +439,7 @@ class ScraperService:
             cur = conn.cursor()
             
             cur.execute("""
-                SELECT target_url, headers, timeout
+                SELECT target_url, headers, timeout, scraper_type
                 FROM scraper_configs
                 WHERE id = %s AND is_active = TRUE;
             """, (config_id,))
@@ -250,7 +454,8 @@ class ScraperService:
             return {
                 "target_url": result[0],
                 "headers": result[1],
-                "timeout": result[2]
+                "timeout": result[2],
+                "scraper_type": result[3] if len(result) > 3 else "requests"
             }
         
         except Exception as e:
@@ -264,7 +469,7 @@ class ScraperService:
                 cur.close()
             if 'conn' in locals():
                 conn.close()
-        
+    
     def _split_and_store_scraped_vehicles(self, vehicles: List[Dict[str, Any]]) -> None:
         """
         Split scraped vehicle data into multiple files and store them.
@@ -353,4 +558,3 @@ class ScraperService:
                 cur.close()
             if 'conn' in locals():
                 conn.close()
-        
