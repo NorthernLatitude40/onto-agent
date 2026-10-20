@@ -1,11 +1,11 @@
 """
 Pydantic schemas for scraper API endpoints
 """
-from typing import Optional, List, Literal, Union
+from typing import Optional, List, Literal, Union, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 
 # Step mode types
-StepMode = Literal["api", "browser"]
+StepMode = Literal["api", "browser", "html", "playwright","default"]
 ParserType = Literal["jsonpath", "css_selector", "xpath", "regex"]
 
 class ParsingRule(BaseModel):
@@ -18,19 +18,48 @@ class ParsingRule(BaseModel):
     regex: Optional[str] = Field(None, description="Regex pattern (optional)")
     output_field: str = Field(..., max_length=100, description="Target field name in result")
     required: bool = Field(default=False, description="Whether this rule is mandatory")
+    
+    model_config = ConfigDict()
 
 class ScraperStep(BaseModel):
-    """Individual step in a scraper workflow with independent mode"""
-    id: str = Field(..., max_length=50, description="Unique step identifier")
-    name: str = Field(..., max_length=100, description="Step display name")
-    mode: StepMode = Field(default="api", description="Step execution mode: 'api' or 'browser'")
-    url: str = Field(..., max_length=500, description="Target URL for this step")
-    method: Literal["GET", "POST", "PUT", "DELETE"] = Field(default="GET", description="HTTP method")
-    params_json: Optional[str] = Field(None, description="Request parameters as JSON string")
-    headers_json: Optional[str] = Field(None, description="Headers as JSON string")
-    parsing_rules: List[ParsingRule] = Field(default_factory=list, description="List of parsing rules for this step")
-    delay: Optional[int] = Field(None, ge=0, le=60000, description="Delay in milliseconds before executing this step (0-60000)")
-    retry_count: Optional[int] = Field(None, ge=1, le=10, description="Number of retries if step fails (1-10)")
+  """Individual step in a scraper workflow with independent mode"""
+
+  # 把它改成 Optional，預設值為 None，前端沒傳也不會報錯
+  id: Optional[str] = Field(
+      None, max_length=50, description="Unique step identifier"
+  )
+  name: str = Field(..., max_length=100, description="Step display name")
+  mode: StepMode = Field(
+      default="api", description="Step execution mode: 'api' or 'browser'"
+  )
+  target_url: str = Field(..., max_length=500, description="Target URL for this step")
+  method: Literal["GET", "POST", "PUT", "DELETE"] = Field(
+      default="GET", description="HTTP method"
+  )
+  params: Optional[Dict[str, Any]] = Field(
+      None, description="Request parameters as JSON object"
+  )
+  headers: Optional[Dict[str, Any]] = Field(
+      None, description="Headers as JSON object"
+  )
+  parsing_rules: ParsingRule | None = Field(
+      default=None,
+      description="Parsing rule for this step",
+  )
+  delay: Optional[int] = Field(
+      None,
+      ge=0,
+      le=60000,
+      description="Delay in milliseconds before executing this step (0-60000)",
+  )
+  retry_count: Optional[int] = Field(
+      None,
+      ge=1,
+      le=10,
+      description="Number of retries if step fails (1-10)",
+  )
+  
+  model_config = ConfigDict()
 
 class ScrapeConfig(BaseModel):
     """Configuration for vehicle scraping task"""
@@ -48,7 +77,20 @@ class ScraperConfigResponse(BaseModel):
     mode: str  # Legacy global mode field
     created_at: Optional[str] = None
     
-    model_config = ConfigDict(from_attributes=True, extra="ignore")
+    model_config = ConfigDict(
+        from_attributes=True,
+        extra="ignore",
+        json_schema_extra={
+            "example": {
+                "id": 1,
+                "name": "GetLost NZ Campervan Scraper",
+                "target_url": "https://getlostinnz.co.nz/",
+                "is_active": True,
+                "mode": "api",
+                "created_at": "2024-01-15T10:30:00.000Z"
+            }
+        }
+    )
 
 class ScraperConfigDetailResponse(BaseModel):
     """Detailed response for a specific scraper configuration"""
@@ -63,7 +105,10 @@ class ScraperConfigDetailResponse(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     
-    model_config = ConfigDict(from_attributes=True, extra="ignore")
+    model_config = ConfigDict(
+        from_attributes=True,
+        extra="ignore"
+    )
 
 class ScraperConfigCreate(BaseModel):
     """Request model for creating a new scraper configuration"""
@@ -88,3 +133,4 @@ class ExecuteScrapeRequest(BaseModel):
     """Request model for executing a scrape with selected configuration"""
     config_id: int = Field(..., description="ID of the scraper configuration to execute")
     mode: Optional[str] = Field(None, description="Override scraping mode (html/api/playwright) - legacy global override")
+    parsing_rules: Optional[List[ParsingRule]] = Field(None, description="Custom parsing rules to override step-level rules")
