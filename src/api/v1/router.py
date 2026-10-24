@@ -12,6 +12,7 @@ from src.api.v1.endpoints.dict_api import router as dict_router
 from src.api.v1.endpoints.controller.config_routes import router as config_routes_router
 from src.api.v1.endpoints.controller.execute_routes import router as execute_routes_router
 from src.api.v1.endpoints.controller.vehicle_routes import router as vehicle_routes_router
+from src.api.v1.endpoints.controller.scraper_projects import router as scraper_projects_router
 from src.api.v1.endpoints.scraper_config_api import router as scraper_config_router
 from src.modules.scraper.router import router as game_router
 
@@ -71,11 +72,11 @@ api_v1_router.include_router(
     prefix="/vehicles",
     tags=["車輛数据抓取"]
 )
-api_v1_router.include_router(
-    vehicle_routes_router,
-    prefix="/vehicles",
-    tags=["車輛数据抓取"]
-)
+# api_v1_router.include_router(
+#     vehicle_routes_router,
+#     prefix="/vehicles",
+#     tags=["車輛数据抓取"]
+# )
 
 api_v1_router.include_router(
     scraper_config_router,
@@ -87,5 +88,11 @@ api_v1_router.include_router(
     game_router,
     prefix="/scraper",
     tags=["游戲数据抓取"]
+)
+
+api_v1_router.include_router(
+    scraper_projects_router,
+    prefix="/scraper_projects",
+    tags=["爬蟲專案群組管理"]
 )
 

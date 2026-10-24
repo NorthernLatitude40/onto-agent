@@ -58,7 +58,7 @@ def create_scraper_config(
         # Create the scraper config
         config = config_repo.create(
             config_data.name, config_data.target_url, config_data.headers,
-            config_data.timeout, config_data.mode,
+            config_data.timeout, config_data.mode, config_data.project_id
         )
         
         # Create steps if provided
@@ -69,6 +69,22 @@ def create_scraper_config(
     except Exception as e:
         raise _db_error(e)
 
+
+@router.get(
+    "/scrape/select_configs/{group_id}",
+    response_model=List[ScraperConfigDetailResponse],
+    summary="根据分组获取配置下拉列表",
+    responses=docs.GET_CONFIG_RESPONSES,
+)
+def get_scraper_select_config(group_id: int):
+    try:
+        config = config_repo.get_by_group_id(group_id)
+    except Exception as e:
+        raise _db_error(e)
+    if config is None:
+        raise _not_found(group_id)
+    
+    return config
 
 @router.get(
     "/scrape/configs/{config_id}",
@@ -133,7 +149,7 @@ def update_scraper_config(
 ):
     fields = {
         k: getattr(config_data, k)
-        for k in ("name", "target_url", "headers", "timeout", "is_active")
+        for k in ("name", "target_url", "headers", "timeout", "is_active", "group_id")
         if getattr(config_data, k) is not None
     }
     if not fields:

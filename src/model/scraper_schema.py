@@ -112,6 +112,7 @@ class ScraperConfigDetailResponse(BaseModel):
 
 class ScraperConfigCreate(BaseModel):
     """Request model for creating a new scraper configuration"""
+    project_id: int = Field(..., description="ID of the project this config belongs to")
     name: str = Field(..., max_length=100, description="Configuration display name")
     target_url: Optional[str] = Field(None, max_length=500, description="Target URL to scrape (legacy format)")
     headers: Optional[dict] = Field(None, description="HTTP headers as key-value pairs")
@@ -121,6 +122,7 @@ class ScraperConfigCreate(BaseModel):
 
 class ScraperConfigUpdate(BaseModel):
     """Request model for updating a scraper configuration"""
+    group_id: int = Field(..., description="ID of the project this config belongs to")
     name: Optional[str] = Field(None, max_length=100, description="Configuration display name")
     target_url: Optional[str] = Field(None, max_length=500, description="Target URL to scrape (legacy format)")
     headers: Optional[dict] = Field(None, description="HTTP headers as key-value pairs")

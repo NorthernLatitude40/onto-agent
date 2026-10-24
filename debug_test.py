@@ -2,11 +2,14 @@
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from src.api.v1.endpoints.controller.vehicle_routes import router as vehicle_router
+from src.api.v1.endpoints.scraper_config_api import router as scraper_config_router
 from fastapi import FastAPI, APIRouter
 
 # Create test app like in conftest
 api_v1_router = APIRouter(prefix='/api/v1')
 api_v1_router.include_router(vehicle_router, tags=['车辆数据查询'])
+from src.api.v1.endpoints.controller.scraper_projects import router as scraper_projects_router
+api_v1_router.include_router(scraper_projects_router, prefix='/vehicles', tags=['车辆配置查询'])
 app = FastAPI()
 app.include_router(api_v1_router)
 client = TestClient(app)

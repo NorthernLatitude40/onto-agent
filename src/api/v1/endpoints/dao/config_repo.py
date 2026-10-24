@@ -1,11 +1,11 @@
 """SQL for the scraper_configs table. No FastAPI imports here."""
 import json
-from typing import Optional
+from typing import Optional, List
 
 from ..db import get_cursor
 
-_COLS = "id, name, target_url, headers, timeout, is_active, mode, created_at, updated_at"
-_UPDATABLE = {"name", "target_url", "headers", "timeout", "is_active"}
+_COLS = "id, name, target_url, headers, timeout, is_active, mode, group_id, created_at, updated_at"
+_UPDATABLE = {"name", "target_url", "headers", "timeout", "is_active", "mode", "group_id"}
 
 
 def _parse_headers(raw):
@@ -28,7 +28,21 @@ def _to_detail(row) -> dict:
     }
 
 
+# Cache for list_active results
+_last_cache = []
+_last_updated = 0
+_CACHE_TTL = 5  # 5 seconds cache duration
+
 def list_active() -> list:
+    """Get all active scraper configs with caching for better performance."""
+    import time
+    global _last_cache, _last_updated
+    
+    # Return cached data if still valid and not empty
+    if time.time() - _last_updated < _CACHE_TTL and _last_cache:
+        return _last_cache.copy()
+    
+    # Query database for fresh data
     with get_cursor() as cur:
         cur.execute(
             """
@@ -36,7 +50,7 @@ def list_active() -> list:
             FROM scraper_configs WHERE is_active = TRUE ORDER BY name;
             """
         )
-        return [
+        _last_cache = [
             {
                 "id": r[0], "name": r[1], "target_url": r[2],
                 "is_active": r[3], "mode": str(r[4]),
@@ -44,7 +58,16 @@ def list_active() -> list:
             }
             for r in cur.fetchall()
         ]
+        _last_updated = time.time()
+    return _last_cache.copy()
 
+
+def get_by_group_id(config_id: int) -> List[dict]:
+    with get_cursor() as cur:
+        cur.execute(f"SELECT {_COLS} FROM scraper_configs WHERE group_id = %s;", (config_id,))
+        rows = cur.fetchall()
+        details = [_to_detail(row) for row in rows]
+        return details
 
 def get_by_id(config_id: int) -> Optional[dict]:
     with get_cursor() as cur:
@@ -53,16 +76,16 @@ def get_by_id(config_id: int) -> Optional[dict]:
         return _to_detail(row) if row else None
 
 
-def create(name, target_url, headers, timeout, mode) -> dict:
+def create(name, target_url, headers, timeout, mode, group_id) -> dict:
     headers_json = json.dumps(headers) if headers else None
     with get_cursor(commit=True) as cur:
         cur.execute(
             f"""
-            INSERT INTO scraper_configs (name, target_url, headers, timeout, mode)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO scraper_configs (name, target_url, headers, timeout, mode, group_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING {_COLS};
             """,
-            (name, target_url, headers_json, timeout, mode),
+            (name, target_url, headers_json, timeout, mode, group_id),
         )
         return _to_detail(cur.fetchone())
 
@@ -147,14 +170,13 @@ def create_steps(config_id: int, steps_data) -> list:
             # 处理 parsing_rules 内部可能存在的 Pydantic 对象
             parsing_rules = step_dict.get("parsing_rules", [])
             jsonpath = parsing_rules.get("jsonpath", None)  # Add jsonpath if present
-            jsonpathObj = json.loads(jsonpath) if jsonpath else None;
 
             # Build config JSON from step data
             config_dict = {
                 "method": step_dict.get("method", "GET"),
                 "params": step_dict.get("params"),
                 "headers": step_dict.get("headers"),
-                "parsing_rules": jsonpathObj,
+                "parsing_rules": parsing_rules,
                 "delay": step_dict.get("delay"),
                 "retry_count": step_dict.get("retry_count"),
             }
