@@ -1,5 +1,6 @@
 """SQL + normalisation for van_models / pricing_inventory."""
 import json
+from decimal import Decimal
 
 from ..db import get_cursor
 
@@ -40,7 +41,7 @@ def list_vehicles() -> list:
                 "berths": r[2],
                 "transmission": r[3],
                 "specs": normalize_specs(r[4]),
-                "price_nzd": float(r[7]) if r[7] is not None else 0.0,
+                "price_nzd": Decimal(r[7]) if r[7] is not None else 0.0,
                 "pickup_date": r[5].isoformat() if r[5] is not None else None,
                 "return_date": r[6].isoformat() if r[6] is not None else None,
             }

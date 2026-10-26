@@ -1,3 +1,4 @@
+from decimal import Decimal
 import os
 import json
 import datetime
@@ -89,7 +90,7 @@ def scrape_and_store_vehicles(target_url="https://getlostinnz.co.nz/", headers=N
         specs['bed'] = bed_mention.get_text(strip=True)[:50] if bed_mention else 'Unknown'
         
         # Look for price information
-        price_nzd = 0.0
+        price_nzd = Decimal('0.0')
         price_elements = soup.find_all('p', string=lambda t: t and '$' in t)
         for price_elem in price_elements:
             try:
@@ -97,7 +98,7 @@ def scrape_and_store_vehicles(target_url="https://getlostinnz.co.nz/", headers=N
                 # Extract numbers from price text
                 price_clean = ''.join(c for c in price_text if c.isdigit() or c == '.')
                 if price_clean:
-                    price_nzd = float(price_clean)
+                    price_nzd = Decimal(price_clean)
                     break
             except:
                 pass
@@ -136,7 +137,7 @@ def scrape_and_store_vehicles(target_url="https://getlostinnz.co.nz/", headers=N
                 'heater': 'Unknown',
                 'bed': 'Unknown'
             },
-            'price_nzd': 0.0,
+            'price_nzd': Decimal('0.0'),
             'pickup_date': datetime.date(2024, 1, 1),
             'return_date': datetime.date(2024, 1, 8)
         }
@@ -162,7 +163,7 @@ def scrape_and_store_vehicles(target_url="https://getlostinnz.co.nz/", headers=N
                     'heater': 'Unknown',
                     'bed': 'Unknown'
                 },
-                'price_nzd': 0.0,
+                'price_nzd': Decimal('0.0'),
                 'pickup_date': datetime.date(2024, 1, 1),
                 'return_date': datetime.date(2024, 1, 8)
             }

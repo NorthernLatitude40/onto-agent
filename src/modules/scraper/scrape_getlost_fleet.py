@@ -37,9 +37,9 @@ def scrape_get_lost_fleet():
         },
         # 预设一段基准价格与测试库存周期（可根据日历抓取或初始化）
         "sample_pricing": [
-            {"pickup_date": "2026-11-01", "return_date": "2026-11-07", "price_nzd": 185.00},
-            {"pickup_date": "2026-11-08", "return_date": "2026-11-15", "price_nzd": 185.00},
-            {"pickup_date": "2026-12-01", "return_date": "2026-12-10", "price_nzd": 220.00}
+            {"pickup_date": "2026-11-01", "return_date": "2026-11-07", "price_nzd": Decimal('185.00')},
+            {"pickup_date": "2026-11-08", "return_date": "2026-11-15", "price_nzd": Decimal('185.00')},
+            {"pickup_date": "2026-12-01", "return_date": "2026-12-10", "price_nzd": Decimal('220.00')}
         ]
     }
 

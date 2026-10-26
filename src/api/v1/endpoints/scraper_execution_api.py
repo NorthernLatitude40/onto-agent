@@ -8,6 +8,7 @@ import os
 from dotenv import load_dotenv
 from typing import List, Optional
 import psycopg2
+from decimal import Decimal
 
 load_dotenv()
 
@@ -44,7 +45,7 @@ class ScrapedVehicle(BaseModel):
     berths: int
     transmission: str
     specs: VehicleSpecs
-    price_nzd: float
+    price_nzd: Decimal
     pickup_date: Optional[str] = None
     return_date: Optional[str] = None
 

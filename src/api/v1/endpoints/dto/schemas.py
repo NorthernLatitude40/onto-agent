@@ -2,7 +2,7 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
-
+from decimal import Decimal
 
 class ScrapeConfig(BaseModel):
     config_id: Optional[int] = None
@@ -23,7 +23,7 @@ class ScrapedVehicle(BaseModel):
     berths: int
     transmission: str
     specs: VehicleSpecs
-    price_nzd: float
+    price_nzd: Decimal
     pickup_date: Optional[str] = None
     return_date: Optional[str] = None
 

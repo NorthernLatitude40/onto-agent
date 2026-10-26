@@ -2,6 +2,8 @@
 Vehicle Scraper Service
 Provides business logic for vehicle data scraping operations
 """
+from datetime import datetime, timezone
+
 import requests
 import psycopg2
 import os
@@ -12,6 +14,7 @@ import random
 import time
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException, status
+from decimal import Decimal
 
 # Import parsing utilities
 from src.service.parsing_utils import apply_parsing_rules
@@ -208,10 +211,14 @@ class ScraperService:
         # Step 2: Get vehicle list
         print("正在访问目标网站抓取车型数据...")
         response = session.post(step2_url, json=common_params, headers=headers, timeout=timeout)
+        
+        # Log API response
+        self._log_api_response("getlostinnz_step2", common_params, response.json(), response.status_code)
+        
         if response.status_code != 200:
             print(f"[!] Step2 API 调用失败，状态码: {response.status_code}")
             return []
-        
+
         vehicles_data = response.json()
         print("Step2 原始回應：", vehicles_data)
         
@@ -222,10 +229,14 @@ class ScraperService:
             
             # Get vehicle details
             response = session.post(step3_url, json=step3_params, headers=headers, timeout=timeout)
+            
+            # Log API response
+            self._log_api_response("getlostinnz_step3", step3_params, response.json(), response.status_code)
+            
             if response.status_code != 200:
                 print(f"[!] Step3 API 调用失败，状态码: {response.status_code}")
                 continue
-            
+
             vehicle_details = response.json()
             
             # Calculate price
@@ -248,10 +259,14 @@ class ScraperService:
             }
             
             response = session.post(calctotal_url, json=calctotal_params, headers=headers, timeout=timeout)
+            
+            # Log API response
+            self._log_api_response("getlostinnz_calctotal", calctotal_params, response.json(), response.status_code)
+            
             if response.status_code != 200:
                 print(f"[!] Calctotal API 调用失败，状态码: {response.status_code}")
                 continue
-            
+
             price_data = response.json()
             
             # Create vehicle entry
@@ -267,9 +282,13 @@ class ScraperService:
                 "berths": vehicle.get("numberofadults", 2),
                 "transmission": "Unknown",
                 "specs": specs,
-                "price_nzd": price_data.get("trip_total", 0.0),
+                "price_nzd": Decimal(price_data.get("trip_total", 0.0)),
                 "pickup_date": common_params["pickupdate"],
                 "return_date": common_params["dropoffdate"],
+                "pickup_location": common_params.get("location_key", "christchurch"),
+                "return_location": common_params.get("gl_location", "christchurch"),
+                "start_time": common_params.get("pickuptime", "10:00"),
+                "end_time": common_params.get("dropofftime", "10:00"),
             }
             
             scraped_vehicles.append(vehicle_entry)
@@ -408,15 +427,19 @@ class ScraperService:
         time.sleep(delay)
         
         scraped_vehicles = []
-        
+
         try:
             # Call step2 API to get vehicle list
             step2_response = session.post(
                 step2_url, json=common_params, headers=headers
             )
+            
+            # Log API response
+            self._log_api_response("getlostinnz_step2", common_params, step2_response.json(), step2_response.status_code)
+            
             step2_response.raise_for_status()
             vehicles_data = step2_response.json()
-            
+
             print("Step2 原始回應：", vehicles_data)
             
             # Call step3 API to get vehicle details and calctotal for price
@@ -432,6 +455,10 @@ class ScraperService:
                     headers=headers,
                     timeout=timeout,
                 )
+                
+                # Log API response
+                self._log_api_response("getlostinnz_step3", step3_params, step3_response.json(), step3_response.status_code)
+                
                 step3_response.raise_for_status()
                 vehicle_details = step3_response.json()
                 
@@ -464,6 +491,10 @@ class ScraperService:
                     headers=headers,
                     timeout=timeout,
                 )
+                
+                # Log API response
+                self._log_api_response("getlostinnz_calctotal", calctotal_params, calctotal_response.json(), calctotal_response.status_code)
+                
                 calctotal_response.raise_for_status()
                 price_data = calctotal_response.json()
                 
@@ -480,9 +511,13 @@ class ScraperService:
                     "berths": vehicle.get("numberofadults", 2),
                     "transmission": "Unknown",
                     "specs": specs,
-                    "price_nzd": price_data.get("trip_total", 0.0),
+                    "price_nzd": Decimal(price_data.get("trip_total", 0.0)),
                     "pickup_date": common_params["pickupdate"],
                     "return_date": common_params["dropoffdate"],
+                    "pickup_location": common_params.get("location_key", "christchurch"),
+                    "return_location": common_params.get("gl_location", "christchurch"),
+                    "start_time": common_params.get("pickuptime", "10:00"),
+                    "end_time": common_params.get("dropofftime", "10:00"),
                 }
                 
                 scraped_vehicles.append(vehicle_entry)
@@ -606,11 +641,15 @@ class ScraperService:
             else:
                 print(f"[!] 不支持的 HTTP 方法: {method}")
                 return None
-            
+
+            # Log API response
+            step_name = step.get("name", "unknown_step")
+            self._log_api_response(step_name, interpolated_params, response.json(), response.status_code)
+
             if response.status_code != 200:
                 print(f"[!] API 调用失败，状态码: {response.status_code}")
                 return None
-            
+
             # Parse JSON response
             try:
                 data = response.json()
@@ -690,9 +729,13 @@ class ScraperService:
                 "berths": car.get("numberofadults", 2),
                 "transmission": "Unknown",
                 "specs": {},
-                "price_nzd": 0.0,
+                "price_nzd": Decimal('0.0'),
                 "pickup_date": context.get("pickupdate", "2026-11-10"),
                 "return_date": context.get("dropoffdate", "2026-12-17"),
+                "pickup_location": context.get("location_key", "christchurch"),
+                "return_location": context.get("gl_location", "christchurch"),
+                "start_time": context.get("pickuptime", "10:00"),
+                "end_time": context.get("dropofftime", "10:00"),
             }
             
             vehicles.append(vehicle_entry)
@@ -824,10 +867,56 @@ class ScraperService:
             print(f"处理分片 {i+1}/{num_chunks} (行 {start_idx+1}-{end_idx})...")
             self._store_scraped_vehicles(chunk, parsing_rules)
     
+    def _log_api_response(
+        self,
+        api_name: str,
+        request_payload: Optional[Dict[str, Any]],
+        response_data: Dict[str, Any],
+        status_code: int
+    ) -> None:
+        """
+        Log API responses to the api_logs table.
+
+        Args:
+            api_name: Name of the API or vendor being called
+            request_payload: Request parameters sent (optional)
+            response_data: Complete raw JSON response from API
+            status_code: HTTP status code
+        """
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+
+            # Convert request_payload to JSON string if provided, otherwise NULL
+            request_json = json.dumps(request_payload) if request_payload else None
+            response_json = json.dumps(response_data)
+
+            cur.execute(
+                """
+                INSERT INTO api_logs (api_name, request_payload, response_data, status_code)
+                VALUES (%s, %s, %s, %s);
+                """,
+                (
+                    api_name,
+                    request_json,
+                    response_json,
+                    status_code
+                )
+            )
+
+            conn.commit()
+        except Exception as e:
+            print(f"[!] 记录 API 日志失败: {e}")
+        finally:
+            if 'cur' in locals():
+                cur.close()
+            if 'conn' in locals():
+                conn.close()
+
     def _store_scraped_vehicles(self, vehicles: List[Dict[str, Any]], parsing_rules: Optional[List[Dict[str, Any]]] = None) -> None:
         """
         Store scraped vehicle data into the database.
-        
+
         Args:
             vehicles: List of vehicle dictionaries to store
             parsing_rules: Optional list of parsing rules to apply before storing
@@ -864,8 +953,18 @@ class ScraperService:
                 specs = v.get("specs", {})
                 pickup_date = v.get("pickup_date")
                 return_date = v.get("return_date")
-                price_nzd = v.get("pricing", 0.0).get("total",0.0)
+                price_nzd = Decimal(v.get("pricing", 0.0).get("total", 0.0))
                 
+                # Extract location and time information
+                pickup_location = (v or {}).get("details", {}).get("startPoint", {}).get("name") or "christchurch"
+                return_location = (v or {}).get("details", {}).get("endPoint", {}).get("name") or "christchurch"
+                dt_start_time = datetime.fromisoformat((v or {}).get("details", {}).get("startDate") or "10:00")
+                dt_end_time = datetime.fromisoformat((v or {}).get("details", {}).get("endDate") or "10:00")
+                dt_start_time_utc = dt_start_time.astimezone(timezone.utc)
+                dt_end_time_utc = dt_end_time.astimezone(timezone.utc)
+                start_time = dt_start_time_utc.strftime('%Y-%m-%d %H:%M:%S')
+                end_time = dt_end_time_utc.strftime('%Y-%m-%d %H:%M:%S')
+
                 # Insert or update van_models table
                 specs_json = json.dumps(specs)
                 
@@ -893,10 +992,13 @@ class ScraperService:
                 # Insert into pricing_inventory table
                 cur.execute(
                     """
-                    INSERT INTO pricing_inventory (model_id, pickup_date, return_date, price_nzd, is_available)
-                    VALUES (%s, %s, %s, %s, TRUE);
+                    INSERT INTO pricing_inventory
+                    (model_id, price_nzd, is_available, pickup_location, return_location,
+                     start_time, end_time)
+                    VALUES (%s, %s, TRUE, %s, %s, %s, %s);
                     """,
-                    (model_id, pickup_date, return_date, price_nzd)
+                    (model_id, price_nzd,
+                     pickup_location, return_location, start_time, end_time)
                 )
             
             conn.commit()
