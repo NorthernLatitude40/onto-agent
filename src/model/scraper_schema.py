@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field, ConfigDict
 StepMode = Literal["api", "browser", "html", "playwright","default"]
 ParserType = Literal["jsonpath", "css_selector", "xpath", "regex"]
 
+class Mapping(BaseModel):
+    """Mapping between source and target fields"""
+    source_key: str = Field(..., description="Source key/path to extract from")
+    target_field: str = Field(..., description="Target field name in result")
+
 class ParsingRule(BaseModel):
     """Data parsing rule with multiple parser support"""
     id: Optional[str] = None
@@ -16,7 +21,8 @@ class ParsingRule(BaseModel):
     css_selector: Optional[str] = Field(None, description="CSS selector (optional)")
     xpath: Optional[str] = Field(None, description="XPath expression (optional)")
     regex: Optional[str] = Field(None, description="Regex pattern (optional)")
-    output_field: str = Field(..., max_length=100, description="Target field name in result")
+    output_field: Optional[str] = Field(None, max_length=100, description="Target field name in result")
+    mappings: List[Mapping] = Field(default_factory=list, description="Array of field mappings from source to target")
     required: bool = Field(default=False, description="Whether this rule is mandatory")
     
     model_config = ConfigDict()
@@ -42,9 +48,9 @@ class ScraperStep(BaseModel):
   headers: Optional[Dict[str, Any]] = Field(
       None, description="Headers as JSON object"
   )
-  parsing_rules: ParsingRule | None = Field(
+  parsing_rules: Optional[Union[ParsingRule, List[ParsingRule]]] = Field(
       default=None,
-      description="Parsing rule for this step",
+      description="Single parsing rule or array of parsing rules for this step to extract target fields",
   )
   delay: Optional[int] = Field(
       None,
@@ -57,6 +63,9 @@ class ScraperStep(BaseModel):
       ge=1,
       le=10,
       description="Number of retries if step fails (1-10)",
+  )
+  target_model: Optional[str] = Field(
+      None, max_length=50, description="Target database model ID for this step"
   )
   
   model_config = ConfigDict()

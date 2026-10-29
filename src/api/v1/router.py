@@ -15,6 +15,10 @@ from src.api.v1.endpoints.controller.vehicle_routes import router as vehicle_rou
 from src.api.v1.endpoints.controller.scraper_projects import router as scraper_projects_router
 from src.api.v1.endpoints.scraper_config_api import router as scraper_config_router
 from src.modules.scraper.router import router as game_router
+from src.api.v1.endpoints.test_proxy_api import router as test_proxy_router
+from src.api.v1.endpoints.scraper_execution_api import router as scraper_execution_router
+from src.api.v1.endpoints.test_step_request import router as test_step_router
+from src.api.v1.endpoints.database_introspection import router as database_introspection_router
 
 # 2. 創建 V1 版本的 API 總路由
 api_v1_router = APIRouter(prefix="/api/v1")
@@ -94,5 +98,29 @@ api_v1_router.include_router(
     scraper_projects_router,
     prefix="/scraper_projects",
     tags=["爬蟲專案群組管理"]
+)
+
+api_v1_router.include_router(
+    scraper_execution_router,
+    prefix="",
+    tags=["爬虫执行与预览"]
+)
+
+api_v1_router.include_router(
+    test_proxy_router,
+    prefix="",
+    tags=["测试代理服务"]
+)
+
+api_v1_router.include_router(
+    test_step_router,
+    prefix="",
+    tags=["测试步骤请求"]
+)
+
+api_v1_router.include_router(
+    database_introspection_router,
+    prefix="",
+    tags=["数据库元数据查询"]
 )
 

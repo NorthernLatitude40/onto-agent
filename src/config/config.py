@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     WX_APP_SECRET: str | None = None
     JWT_SECRET_KEY: str = "change_this_to_a_secure_secret_in_prod"
 
+    # --- Supabase Configuration ---
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+
     # ----------------------------------------------------------------------
     # 配置与路径常量（禁止硬编码本地绝对路径）
     # ----------------------------------------------------------------------

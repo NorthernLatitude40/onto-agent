@@ -8,7 +8,12 @@ import requests
 import psycopg2
 import os
 import re
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = lambda: None  # No-op if dotenv not available
+
 import json
 import random
 import time
@@ -648,6 +653,8 @@ class ScraperService:
 
             if response.status_code != 200:
                 print(f"[!] API 调用失败，状态码: {response.status_code}")
+                print("錯誤原因：", response.reason)
+                print("伺服器返回的詳細錯誤內容：", response.text)
                 return None
 
             # Parse JSON response
@@ -929,45 +936,18 @@ class ScraperService:
             cur = conn.cursor()
             
             # Apply parsing rules if provided
-            processed_vehicles = vehicles
+            processed_vehicles = []
             if parsing_rules and len(parsing_rules) > 0:
-                processed_vehicles = []
                 for v in vehicles:
                     # Apply all parsing rules to each vehicle
                     parsed_data = apply_parsing_rules(v, parsing_rules)
                     if parsed_data:
-                        # Merge parsed data with original vehicle data
-                        # Parsed fields take precedence over original fields
-                        processed_vehicle = {**v, **parsed_data}
-                        processed_vehicles.append(processed_vehicle)
+                        processed_vehicles.append(parsed_data)
                     else:
                         # If no parsing rules matched, use original data
                         processed_vehicles.append(v)
-            
-            for v in processed_vehicles:
-                # Extract required fields from vehicle data
-                # Use parsed data if available, fall back to original fields
-                model_name = v.get("vehicle","").get("model_name","") or v.get("vehicle","").get("name","")
-                berths = v.get("berths", 0)
-                transmission = v.get("transmission", "")
-                specs = v.get("specs", {})
-                pickup_date = v.get("pickup_date")
-                return_date = v.get("return_date")
-                price_nzd = Decimal(v.get("pricing", 0.0).get("total", 0.0))
-                
-                # Extract location and time information
-                pickup_location = (v or {}).get("details", {}).get("startPoint", {}).get("name") or "christchurch"
-                return_location = (v or {}).get("details", {}).get("endPoint", {}).get("name") or "christchurch"
-                dt_start_time = datetime.fromisoformat((v or {}).get("details", {}).get("startDate") or "10:00")
-                dt_end_time = datetime.fromisoformat((v or {}).get("details", {}).get("endDate") or "10:00")
-                dt_start_time_utc = dt_start_time.astimezone(timezone.utc)
-                dt_end_time_utc = dt_end_time.astimezone(timezone.utc)
-                start_time = dt_start_time_utc.strftime('%Y-%m-%d %H:%M:%S')
-                end_time = dt_end_time_utc.strftime('%Y-%m-%d %H:%M:%S')
 
-                # Insert or update van_models table
-                specs_json = json.dumps(specs)
-                
+            for v in processed_vehicles:
                 cur.execute(
                     """
                     INSERT INTO van_models (model_name, berths, transmission, specs)
@@ -975,10 +955,10 @@ class ScraperService:
                     RETURNING id;
                     """,
                     (
-                        model_name,
-                        berths,
-                        transmission,
-                        specs_json
+                        v.get("model_name"),
+                        v.get("berths"),
+                        v.get("transmission"),
+                        v.get("specs")
                     )
                 )
                 result = cur.fetchone()
@@ -997,8 +977,8 @@ class ScraperService:
                      start_time, end_time)
                     VALUES (%s, %s, TRUE, %s, %s, %s, %s);
                     """,
-                    (model_id, price_nzd,
-                     pickup_location, return_location, start_time, end_time)
+                    (model_id, v.get("price_nzd"),
+                     v.get("pickup_location"), v.get("return_location"), v.get("start_time"), v.get("end_time"))
                 )
             
             conn.commit()

@@ -213,7 +213,7 @@ def create_scraper_config(config_data: ScraperConfigCreate= Body(
         if config_data.steps:
             for step in config_data.steps:
                 # Convert parsing_rules to JSON string
-                parsing_rules_json = json.dumps([rule.model_dump() for rule in step.parsing_rules]) if step.parsing_rules else "[]"
+                parsing_rules_json = json.dumps(step.parsing_rules) if step.parsing_rules else "[]"
                 
                 # Insert step configuration
                 cur.execute(
@@ -259,11 +259,12 @@ def create_scraper_config(config_data: ScraperConfigCreate= Body(
                     "mode": step_row[2],
                     "url": step_row[3],
                     "method": step_config.get("method", "GET"),
-                    "params_json": step_config.get("params_json"),
-                    "headers_json": step_config.get("headers_json"),
+                    "params": json.loads(step_config.get("params_json", "{}")) if step_config.get("params_json") else {},
+                    "headers": json.loads(step_config.get("headers_json", "{}")) if step_config.get("headers_json") else {},
                     "parsing_rules": json.loads(step_config.get("parsing_rules", "[]")) if step_config.get("parsing_rules") else [],
                     "delay": step_config.get("delay"),
-                    "retry_count": step_config.get("retry_count")
+                    "retry_count": step_config.get("retry_count"),
+                    "target_model": step_config.get("target_model")
                 })
         
         # Return the created configuration
@@ -424,11 +425,12 @@ def get_scraper_config(config_id: int):
                 "mode": step_row[2],
                 "url": step_row[3],
                 "method": step_config.get("method", "GET"),
-                "params_json": step_config.get("params_json"),
-                "headers_json": step_config.get("headers_json"),
+                "params": json.loads(step_config.get("params_json", "{}")) if step_config.get("params_json") else {},
+                "headers": json.loads(step_config.get("headers_json", "{}")) if step_config.get("headers_json") else {},
                 "parsing_rules": json.loads(step_config.get("parsing_rules", "[]")) if step_config.get("parsing_rules") else [],
                 "delay": step_config.get("delay"),
-                "retry_count": step_config.get("retry_count")
+                "retry_count": step_config.get("retry_count"),
+                "target_model": step_config.get("target_model")
             })
         
         config = {
@@ -554,7 +556,7 @@ def update_scraper_config(
             # Then insert new steps
             if config_data.steps:
                 for step in config_data.steps:
-                    parsing_rules_json = json.dumps([rule.model_dump() for rule in step.parsing_rules]) if step.parsing_rules else "[]"
+                    parsing_rules_json = json.dumps(step.parsing_rules) if step.parsing_rules else "[]"
                     cur.execute(
                         """
                         INSERT INTO crawler_steps (scraper_config_id, name, target_type, target_url, config)
@@ -568,8 +570,8 @@ def update_scraper_config(
                             step.url,
                             json.dumps({
                                 "method": step.method,
-                                "params_json": step.params_json,
-                                "headers_json": step.headers_json,
+                                "params": step.params,
+                                "headers": step.headers,
                                 "parsing_rules": parsing_rules_json,
                                 "delay": step.delay,
                                 "retry_count": step.retry_count
@@ -602,11 +604,12 @@ def update_scraper_config(
                 "mode": step_row[2],
                 "url": step_row[3],
                 "method": step_config.get("method", "GET"),
-                "params_json": step_config.get("params_json"),
-                "headers_json": step_config.get("headers_json"),
+                "params": json.loads(step_config.get("params_json", "{}")) if step_config.get("params_json") else {},
+                "headers": json.loads(step_config.get("headers_json", "{}")) if step_config.get("headers_json") else {},
                 "parsing_rules": json.loads(step_config.get("parsing_rules", "[]")) if step_config.get("parsing_rules") else [],
                 "delay": step_config.get("delay"),
-                "retry_count": step_config.get("retry_count")
+                "retry_count": step_config.get("retry_count"),
+                "target_model": step_config.get("target_model")
             })
         
         config_response = {

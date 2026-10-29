@@ -116,3 +116,56 @@ class TestGetStoredVehicles:
         # Verify optional fields
         assert "pickup_date" in data[0]
         assert "return_date" in data[0]
+
+class TestUpdateScraperConfig:
+    """Test PUT /scrape/configs/{config_id} endpoint"""
+
+    def test_update_scraper_config_with_group_id(self):
+        """Test that PUT /scrape/configs/{config_id} accepts group_id in request body"""
+        from fastapi.testclient import TestClient
+        from src.api.v1.endpoints.controller.config_routes import router as config_router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(config_router)
+        client = TestClient(app)
+
+        # This should pass - group_id is required and correctly formatted
+        response = client.put(
+            "/scrape/configs/1",
+            json={
+                "group_id": 1,
+                "name": "Updated Config",
+                "target_url": "https://example.com",
+                "timeout": 30,
+                "is_active": True
+            }
+        )
+
+        # Should not raise validation error about missing group_id
+        assert response.status_code != 422
+
+    def test_update_scraper_config_missing_group_id(self):
+        """Test that PUT /scrape/configs/{config_id} requires group_id"""
+        from fastapi.testclient import TestClient
+        from src.api.v1.endpoints.controller.config_routes import router as config_router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(config_router)
+        client = TestClient(app)
+
+        # This should fail - group_id is required
+        response = client.put(
+            "/scrape/configs/1",
+            json={
+                "name": "Updated Config",
+                "target_url": "https://example.com",
+                "timeout": 30,
+                "is_active": True
+                # Missing group_id
+            }
+        )
+
+        # Should raise validation error about missing required field
+        assert response.status_code == 422
