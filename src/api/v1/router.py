@@ -19,6 +19,7 @@ from src.api.v1.endpoints.test_proxy_api import router as test_proxy_router
 from src.api.v1.endpoints.scraper_execution_api import router as scraper_execution_router
 from src.api.v1.endpoints.test_step_request import router as test_step_router
 from src.api.v1.endpoints.database_introspection import router as database_introspection_router
+from src.api.v1.endpoints.controller.inventory import router as inventory_router
 
 # 2. 創建 V1 版本的 API 總路由
 api_v1_router = APIRouter(prefix="/api/v1")
@@ -122,5 +123,11 @@ api_v1_router.include_router(
     database_introspection_router,
     prefix="",
     tags=["数据库元数据查询"]
+)
+
+api_v1_router.include_router(
+    inventory_router,
+    prefix="",
+    tags=["数据库元数据查询1"]
 )
 

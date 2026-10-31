@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import inspect, text
 from src.common.database import engine
 
-router = APIRouter(prefix="/api/v1/database", tags=["database-introspection"])
+router = APIRouter(prefix="/database", tags=["database-introspection"])
 
 @router.get("/tables", response_model=List[Dict[str, Any]])
 async def get_database_tables():
