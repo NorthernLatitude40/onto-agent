@@ -142,8 +142,6 @@ def get_steps_by_config_id(config_id: int) -> list:
     return steps
 
 
-import json
-
 def create_steps(config_id: int, steps_data) -> list:
     """Create multiple crawler steps for a scraper config."""
     if not steps_data:
@@ -152,7 +150,7 @@ def create_steps(config_id: int, steps_data) -> list:
     created_steps = []
     with get_cursor(commit=True) as cur:
         for step in steps_data:
-            # 兼容处理：将 Pydantic 模型转换为字典，防止 .get() 报错
+            # 兼容處理：將 Pydantic 模型或物件轉換為字典
             if hasattr(step, "model_dump"):
                 step_dict = step.model_dump()
             elif hasattr(step, "dict"):
@@ -167,9 +165,21 @@ def create_steps(config_id: int, steps_data) -> list:
             target_type = step_dict.get("mode", "api")  # Map mode to target_type
             target_url = step_dict.get("target_url", "")
             
-            # 处理 parsing_rules 内部可能存在的 Pydantic 对象
+            # 安全處理 parsing_rules（可能是 list 或 dict）
             parsing_rules = step_dict.get("parsing_rules", [])
-            jsonpath = parsing_rules.get("jsonpath", None)  # Add jsonpath if present
+            jsonpath = None
+            if isinstance(parsing_rules, dict):
+                jsonpath = parsing_rules.get("jsonpath", None)
+            elif isinstance(parsing_rules, list) and len(parsing_rules) > 0:
+                # 如果是列表，檢查第一個元素是否為字典並嘗試抓取
+                first_rule = parsing_rules[0]
+                if hasattr(first_rule, "model_dump"):
+                    first_rule = first_rule.model_dump()
+                elif hasattr(first_rule, "dict"):
+                    first_rule = first_rule.dict()
+                
+                if isinstance(first_rule, dict):
+                    jsonpath = first_rule.get("jsonpath", None)
 
             # Build config JSON from step data
             config_dict = {

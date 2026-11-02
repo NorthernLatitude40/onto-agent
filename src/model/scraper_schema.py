@@ -17,6 +17,7 @@ class ParsingRule(BaseModel):
     """Data parsing rule with multiple parser support"""
     id: Optional[str] = None
     name: str = Field(..., max_length=100, description="Rule display name")
+    target_model: str = Field(..., max_length=100, description="Model display name")
     jsonpath: Optional[str] = Field(None, description="JSONPath expression (optional)")
     css_selector: Optional[str] = Field(None, description="CSS selector (optional)")
     xpath: Optional[str] = Field(None, description="XPath expression (optional)")
