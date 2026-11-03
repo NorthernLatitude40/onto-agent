@@ -458,15 +458,15 @@ def search_knowledge_base(query: str) -> str:
         cur = conn.cursor()
         
         # 使用 pgvector 计算余弦距离获取最相关的 3 个切片
-        cur.execute(
-            """
+        sql_query = """
             SELECT title, content, 1 - (embedding <=> %s::vector) AS similarity
             FROM rag_documents
             ORDER BY embedding <=> %s::vector
             LIMIT 3;
-            """,
-            (query_embedding, query_embedding)
-        )
+        """
+        logger.info(f"[SQL Query] Executing: {sql_query}")
+        logger.info(f"[SQL Parameters] query_embedding={query_embedding[:5]}... (truncated)")
+        cur.execute(sql_query, (query_embedding, query_embedding))
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -515,8 +515,8 @@ def search_campervan_pricing(model_name: str, pickup_date: str, return_date: str
             LIMIT 5;
         """
         
-        logger.info(f"Executing SQL query: {query}")
-        logger.info(f"With parameters: %{model_name}%, {pickup_date}, {return_date}")
+        logger.info(f"[SQL Query] Executing: {query}")
+        logger.info(f"[SQL Parameters] model_name=%{model_name}%, pickup_date={pickup_date}, return_date={return_date}")
         cur.execute(query, (f"%{model_name}%", pickup_date, return_date))
         rows = cur.fetchall()
         cur.close()
@@ -539,8 +539,94 @@ def search_campervan_pricing(model_name: str, pickup_date: str, return_date: str
         return f"价格与库存查询出错: {str(e)}"
 
 
+@tool
+def query_vehicles(keyword: str = "", pickup_date: Optional[str] = None, return_date: Optional[str] = None) -> str:
+    """查询房车/车辆库存和价格信息。
+    
+    当用户询问“有哪些房车可租”、“某个型号的车是否有空”时，调用此工具。
+    
+    参数说明:
+    - keyword: 车辆型号关键词（例如 'Toyota'、'Hiace'），留空则查所有
+    - pickup_date: 取车日期，格式为 YYYY-MM-DD，可选
+    - return_date: 还车日期，格式为 YYYY-MM-DD，可选
+    
+    注意：如果提供了日期参数，将只显示该时间段内可用的车辆。
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # 基础查询 - 获取所有车型
+        base_query = """
+            SELECT
+                m.id,
+                m.model_name,
+                m.berths,
+                m.transmission,
+                p.price_nzd,
+                p.is_available,
+                p.pickup_date,
+                p.return_date
+            FROM van_models m
+            JOIN pricing_inventory p ON m.id = p.model_id AND p.is_available = TRUE
+        """
+        
+        params = []
+        where_clauses = []
+        
+        # 关键词过滤
+        if keyword:
+            where_clauses.append("m.model_name ILIKE %s")
+            params.append(f"%{keyword}%")
+        
+        # 日期范围过滤（如果提供了日期参数）
+        if pickup_date and return_date:
+            where_clauses.append("(p.pickup_date <= %s::date AND p.pickup_date >= %s::date)")
+            where_clauses.append("(p.return_date <= %s::date AND p.return_date >= %s::date)")
+            params.extend([return_date, pickup_date, return_date, pickup_date])
+        
+        # 构建完整查询
+        if where_clauses:
+            query = base_query + " WHERE " + " AND ".join(where_clauses) + " ORDER BY m.model_name"
+        else:
+            query = base_query + " ORDER BY m.model_name"
+        
+        logger.info(f"[SQL Query] Executing: {query}")
+        logger.info(f"[SQL Parameters] params={params}")
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        if not rows:
+            return f"没有找到符合条件的车辆。{'' if not keyword else '请尝试其他关键词或不指定日期范围。'}"
+        
+        results = []
+        for row in rows:
+            model_id, name, berths, trans, price, available, p_date, r_date = row
+            
+            # 格式化价格和可用性
+            price_info = f"${price:.2f} NZD" if price is not None else "未设置价格"
+            status = "有库存/可预订" if available else "已满/不可预订"
+            
+            # 格式化日期信息
+            date_info = ""
+            if p_date and r_date:
+                date_info = f" | 时段: {p_date} 至 {r_date}"
+            
+            results.append(
+                f"ID: {model_id} | 车型: {name} | 载客数: {berths}人 | 变速箱: {trans} | "
+                f"价格: {price_info} | 状态: {status}{date_info}"
+            )
+        
+        return "\n".join(results)
+        
+    except Exception as e:
+        logger.error(f"查询车辆出错: {str(e)}", exc_info=True)
+        return f"查询车辆时出现错误: {str(e)}"
+
 # 工具导出列表（用于绑定给 Gemini / LangChain）
-tools = [add_device, sell_device, query_shop_data, search_campervan_pricing, search_knowledge_base]
+tools = [add_device, sell_device, query_shop_data, search_campervan_pricing, search_knowledge_base, query_vehicles]
 
 
 if __name__ == "__main__":

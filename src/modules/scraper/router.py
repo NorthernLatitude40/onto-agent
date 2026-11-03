@@ -2,7 +2,7 @@ import random
 from fastapi import APIRouter, HTTPException
 from src.modules.scraper.service import ScraperService
 
-router = APIRouter(prefix="/api/v1/scraper", tags=["爬蟲與數據聚合"])
+router = APIRouter()
 
 
 @router.get("/aggregated-items", summary="獲取最新跨平臺聚合行情")

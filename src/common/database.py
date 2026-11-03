@@ -11,6 +11,9 @@ engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
     echo=settings.is_development,
+    pool_recycle=3600,   # 每 1 小時自動回收並重建連線
+    pool_size=10,        # 依據你的伺服器負載調整連線池大小
+    max_overflow=20      # 允許額外暫時建立的連線數
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -46,11 +49,16 @@ def init_db() -> None:
 engine_async = create_async_engine(
     settings.DATABASE_URL_ASYNC,
     echo=settings.is_development,
+    pool_pre_ping=True,  # 每次執行前檢測連線是否存活（防止非同步連線中斷）
+    pool_recycle=3600,   # 每 1 小時自動回收重建
+    pool_size=10,
+    max_overflow=20,
     connect_args={
         "statement_cache_size": 0,
         "prepared_statement_cache_size": 0,
     },
 )
+
 AsyncSessionLocal = async_sessionmaker(
     engine_async, class_=AsyncSession, expire_on_commit=False
 )

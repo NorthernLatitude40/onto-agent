@@ -18,6 +18,7 @@ class ShopModel(Base):
     city = Column(String(50), nullable=True, comment="城市")
     district = Column(String(50), nullable=True, comment="区县")
     address_detail = Column(String(255), nullable=True, comment="详细地址")
+    industry = Column(String(50), nullable=True, comment="行业领域/店铺类型：手机、电脑、数码配件等")
     is_active = Column(Boolean, default=True, comment="店铺状态：1-正常，0-禁用")
 
     # 1个店铺对应多个 staff 记录
