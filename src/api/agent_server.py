@@ -102,15 +102,16 @@ def create_api(harness) -> FastAPI:
     # 2. 注册全局异常处理器
     register_exception_handlers(app)
 
-    # 3. 动态配置 CORS 中间件（支持环境变量覆盖）
-    allowed_origins = os.getenv(
-        "CORS_ORIGINS",
-        "https://onto-web-front-fyajaslfh-wayne-65df.vercel.app,http://localhost:5173,http://127.0.0.1:5173"
-    ).split(",")
+    allowed_origins = [
+        o.strip()
+        for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+        if o.strip()
+    ]
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins if "*" not in allowed_origins else ["*"],
+        allow_origin_regex=r"https://onto-web-front-[a-z0-9]+-wayne-65df\.vercel\.app",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
