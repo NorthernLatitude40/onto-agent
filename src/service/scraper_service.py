@@ -53,7 +53,7 @@ class ScraperService:
     
     def __init__(self):
         self.playwright_scraper = PlaywrightScraper()
-    
+
     async def execute_scrape(
         self,
         config_id: int,

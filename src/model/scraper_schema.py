@@ -3,6 +3,7 @@ Pydantic schemas for scraper API endpoints
 """
 from typing import Optional, List, Literal, Union, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
+from datetime import datetime
 
 # Step mode types
 StepMode = Literal["api", "browser", "html", "playwright","default"]
@@ -101,6 +102,12 @@ class ScraperConfigResponse(BaseModel):
             }
         }
     )
+    
+class ScraperRunStats(BaseModel):
+    status: Literal["idle", "running"] = "idle"
+    last_run_at: Optional[datetime] = None
+    success_rate: Optional[float] = None   # 0~1，前端自行轉成百分比
+    total_items: int = 0
 
 class ScraperConfigDetailResponse(BaseModel):
     """Detailed response for a specific scraper configuration"""
@@ -114,6 +121,7 @@ class ScraperConfigDetailResponse(BaseModel):
     steps: Optional[List[ScraperStep]] = Field(None, description="Array of step configurations (new format)")
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    stats: ScraperRunStats = ScraperRunStats()
     
     model_config = ConfigDict(
         from_attributes=True,

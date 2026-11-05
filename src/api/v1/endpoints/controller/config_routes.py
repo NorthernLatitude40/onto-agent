@@ -135,8 +135,11 @@ def get_scraper_config(config_id: int):
         steps.append(ScraperStep(**step_dict))
     
     config["steps"] = steps
+    try:
+        config["stats"] = config_repo.get_run_stats(config_id)
+    except Exception as e:
+        raise _db_error(e)
     return config
-
 
 @router.put(
     "/scrape/configs/{config_id}",
