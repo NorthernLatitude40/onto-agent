@@ -64,7 +64,7 @@ def list_active() -> list:
 
 def get_by_group_id(config_id: int) -> List[dict]:
     with get_cursor() as cur:
-        cur.execute(f"SELECT {_COLS} FROM scraper_configs WHERE group_id = %s;", (config_id,))
+        cur.execute(f"SELECT {_COLS} FROM scraper_configs WHERE group_id = %s AND is_active = TRUE;", (config_id,))
         rows = cur.fetchall()
         details = [_to_detail(row) for row in rows]
         return details

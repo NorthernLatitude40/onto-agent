@@ -41,6 +41,7 @@ def run_api():
             host=host,
             port=port,
             reload=is_debug,        # 开发模式下开启热重载
+            reload_dirs=["src"],
             workers=workers if not is_debug else 1,
             log_level="info",
             access_log=True,
