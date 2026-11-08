@@ -92,7 +92,7 @@ class ScraperService:
         try:
             if scraper_type == "scrapling" and SCRAPLING_AVAILABLE:
                 # Use Scrapling framework
-                scraped_vehicles = self._scrape_with_scrapling(config_data)
+                scraped_vehicles = await self._scrape_with_scrapling(config_data)
             elif scraper_type == "playwright":
                 # Use Playwright scraper
                 # Try using Scrapling framework if available, otherwise use execute_scrape
@@ -108,7 +108,7 @@ class ScraperService:
                         scraped_vehicles = []
             else:
                 # Use requests (default)
-                scraped_vehicles = self._scrape_with_requests(config_data)
+                scraped_vehicles = await self._scrape_with_requests(config_data)
         
         except Exception as api_error:
             print(f"API 调用错误: {api_error}")
@@ -137,7 +137,7 @@ class ScraperService:
             "vehicles": scraped_vehicles
         }
     
-    def _scrape_with_scrapling(self, config_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _scrape_with_scrapling(self, config_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Scrape vehicle data using the Scrapling framework.
         
@@ -154,7 +154,7 @@ class ScraperService:
         
         # Check if steps configuration is present (new sequential API feature)
         if "steps" in config_data and config_data["steps"]:
-            return self._execute_sequential_steps(config_data, requests.Session())
+            return await self._execute_sequential_steps(config_data, requests.Session())
         
         print("[+] 使用 Scrapling 框架进行数据抓取...")
         
@@ -327,7 +327,7 @@ class ScraperService:
                 if key not in params:
                     print(f"[!] Warning: 'default_params.{key}' not configured, using default value")
     
-    def _scrape_with_requests(self, config_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _scrape_with_requests(self, config_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Scrape vehicle data using the requests library (original implementation).
         
@@ -422,7 +422,7 @@ class ScraperService:
 
         # Check if steps configuration is present (new sequential API feature)
         if "steps" in config_data and config_data["steps"]:
-            return self._execute_sequential_steps(config_data, session)
+            return await self._execute_sequential_steps(config_data, session)
         
         print(f"正在访问目标网站抓取车型数据...")
         
@@ -533,7 +533,7 @@ class ScraperService:
         
         return scraped_vehicles
     
-    def _execute_sequential_steps(self, config_data: Dict[str, Any], session: requests.Session) -> List[Dict[str, Any]]:
+    async def _execute_sequential_steps(self, config_data: Dict[str, Any], session: requests.Session) -> List[Dict[str, Any]]:
         """
         Execute sequential API requests based on steps configuration.
         
@@ -586,15 +586,30 @@ class ScraperService:
             scrape_mode = step_dict.get("scrape_mode", "api")
             
             if scrape_mode == "playwright":
-                print(f"[!] 步骤 {step_idx + 1} 使用 Playwright 模式，暂不支持在 requests 中执行")
-                continue
+                # Playwright mode - execute using browser automation
+                result = await self._execute_playwright_step(step_dict, context)
+                
+                if result is not None:
+                    # Store the result in context for subsequent steps
+                    step_name = step_dict.get("name", f"step_{step_idx}")
+                    context[step_name] = result
+                    context[f"result_{step_idx}"] = result
+                    
+                    # Check if this is a final step that returns vehicles
+                    if (len(steps)-1)==step_idx:
+                        if isinstance(result, list) and result:  # Only extend if non-empty list
+                            scraped_vehicles.extend(result)
+                        elif isinstance(result, dict) and "cars" in result:
+                            # Handle API response format with cars array
+                            processed_vehicles = self._process_api_response(result, step_dict, context)
+                            scraped_vehicles.extend(processed_vehicles)
             elif scrape_mode == "html":
                 # HTML scraping mode - would use Scrapling or BeautifulSoup
                 print(f"[!] 步骤 {step_idx + 1} 使用 HTML 模式，暂不支持在 requests 中执行")
                 continue
             else:
                 # API mode (default)
-                result = self._execute_api_step(step_dict, context)
+                result = await self._execute_api_step(step_dict, context)
                 
                 if result is not None:
                     # Store the result in context for subsequent steps
@@ -613,7 +628,7 @@ class ScraperService:
         
         return scraped_vehicles
     
-    def _execute_api_step(self, step: Dict[str, Any], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _execute_api_step(self, step: Dict[str, Any], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Execute a single API step.
         
@@ -668,6 +683,98 @@ class ScraperService:
                 
         except Exception as e:
             print(f"[!] API 调用错误: {e}")
+            return None
+    
+    async def _execute_playwright_step(self, step: Dict[str, Any], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Execute a single Playwright step using browser automation.
+        
+        Args:
+            step: Step configuration dictionary
+            context: Context containing timeout and previous results
+            
+        Returns:
+            Response data from the Playwright execution
+        """
+        timeout = context["timeout"]
+        
+        # Extract playwright-specific configuration
+        url = step.get("url", "")
+        wait_selector = step.get("wait_selector", None)
+        execute_javascript = step.get("execute_javascript", None)
+        headers = step.get("headers", {})
+        proxy = step.get("proxy", None)
+        user_agent = step.get("user_agent", None)
+        viewport_size = step.get("viewport_size", {"width": 1920, "height": 1080})
+        
+        # Apply parameter interpolation using context
+        interpolated_params = self._interpolate_parameters(step.get("params", {}), context)
+        interpolated_headers = self._interpolate_parameters(headers, context)
+        
+        print(f"[-] 执行 Playwright 抓取: {url}")
+        
+        try:
+            # Create Playwright scraper instance
+            playwright_scraper = PlaywrightScraper()
+            
+            # Configure browser options based on step settings
+            browser_options = {
+                "headless": True,
+                "slow_mo": 50,
+                "timeout": timeout * 1000,  # Convert to milliseconds
+            }
+            
+            if proxy:
+                browser_options["proxy"] = proxy
+            
+            if user_agent:
+                browser_options["user_agent"] = user_agent
+            
+            if viewport_size:
+                browser_options["viewport"] = {
+                    "width": viewport_size.get("width", 1920),
+                    "height": viewport_size.get("height", 1080)
+                }
+            
+            # Execute the playwright scraping using scrape_with_playwright method
+            result = await playwright_scraper.scrape_with_playwright({
+                "target_url": url,
+                "timeout": timeout,
+                "common_params": interpolated_params,
+                "headers": interpolated_headers,
+                "wait_selector": wait_selector,
+                "execute_javascript": execute_javascript,
+            })
+            
+            # Convert result to list format expected by the scraper service
+            if result is None:
+                final_result = []
+            elif isinstance(result, dict):
+                # If it's a dict with 'vehicles' key (from playwright_scraper), extract vehicles
+                if "vehicles" in result:
+                    final_result = result["vehicles"]
+                else:
+                    # Otherwise wrap the entire result in a list
+                    final_result = [result]
+            elif isinstance(result, list):
+                # Already a list, return as-is
+                final_result = result
+            else:
+                # Unexpected type, wrap it
+                final_result = [result]
+            
+            # Log the playwright response
+            step_name = step.get("name", "unknown_step")
+            print(f"[+] Playwright 步骤完成: {step_name}")
+            if final_result:
+                print(f"[+] 获取到 {len(final_result)} 条数据")
+            
+            return final_result
+            
+        except Exception as e:
+            print(f"[!] Playwright 执行错误: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _interpolate_parameters(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:

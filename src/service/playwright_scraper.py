@@ -584,6 +584,12 @@ class PlaywrightScraper:
             Dict containing scrape results with success status, count, message, and vehicles list
         """
         try:
+            # Handle different modes of operation
+            if config_data.get("mode") == "playwright" and "steps" in config_data:
+                # Test mode: execute sequential steps
+                return await self._execute_playwright_steps(config_data["steps"])
+            
+            # Original production mode for GetLost NZ scraping
             self.context = await self.browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 ignore_https_errors=True,
@@ -866,4 +872,223 @@ class PlaywrightScraper:
             
         except Exception as e:
             print(f"[Playwright] JavaScript API 调用错误: {e}")
+            return None
+    
+    async def scrape(
+        self,
+        url: str,
+        wait_selector: Optional[str] = None,
+        execute_javascript: Optional[str] = None,
+        headers: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        browser_options: Optional[Dict[str, Any]] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Execute a simple Playwright scrape operation.
+        
+        This method provides a simpler interface for single-page scraping operations
+        as needed by the sequential steps execution in scraper_service.py.
+        
+        Args:
+            url: URL to navigate to
+            wait_selector: CSS selector to wait for (optional)
+            execute_javascript: JavaScript code to execute and return result (optional)
+            headers: HTTP headers to use
+            params: Request parameters
+            browser_options: Browser configuration options
+            
+        Returns:
+            List of scraped vehicle dictionaries, or None on error
+        """
+        try:
+            # Create a new browser context with optional customization
+            context_options = {
+                "ignore_https_errors": True,
+            }
+            
+            if browser_options and "user_agent" in browser_options:
+                context_options["user_agent"] = browser_options["user_agent"]
+            
+            self.context = await self.browser.new_context(**context_options)
+            self.page = await self.context.new_page()
+            
+            # Set viewport if specified
+            if browser_options and "viewport" in browser_options:
+                await self.page.set_viewport_size(
+                    width=browser_options["viewport"].get("width", 1920),
+                    height=browser_options["viewport"].get("height", 1080)
+                )
+            
+            # Set timeout if specified
+            timeout = browser_options.get("timeout", 30000) if browser_options else 30000
+            
+            print(f"[Playwright] Navigating to: {url}")
+            await self.page.goto(url, timeout=timeout)
+            
+            # Wait for selector if specified
+            if wait_selector:
+                print(f"[Playwright] Waiting for selector: {wait_selector}")
+                try:
+                    await self.page.wait_for_selector(wait_selector, timeout=timeout)
+                except Exception as e:
+                    print(f"[Playwright] Selector not found or timed out: {e}")
+            
+            # Execute JavaScript if specified
+            result = None
+            if execute_javascript:
+                print(f"[Playwright] Executing JavaScript...")
+                try:
+                    result = await self.page.evaluate(execute_javascript)
+                    print(f"[Playwright] JavaScript execution completed")
+                except Exception as e:
+                    print(f"[Playwright] JavaScript execution error: {e}")
+            
+            # If no JavaScript to execute, extract data from page
+            if result is None:
+                print("[Playwright] Extracting data from page HTML...")
+                html_content = await self.page.content()
+                
+                # Simple parsing - look for vehicle data in JSON format or tables
+                # This is a basic implementation that can be extended
+                result = []
+                
+                # Try to find JSON data in the page
+                import re
+                json_matches = re.findall(r'\{[\[\{].*?\}\]', html_content, re.DOTALL)
+                if json_matches:
+                    try:
+                        import json as json_module
+                        for match in json_matches[:5]:  # Limit to first 5 JSON objects
+                            try:
+                                data = json_module.loads(match)
+                                if isinstance(data, list):
+                                    result.extend(data)
+                                elif isinstance(data, dict) and "cars" in data:
+                                    result.extend(data["cars"])
+                            except:
+                                continue
+                    except Exception as e:
+                        print(f"[Playwright] JSON parsing error: {e}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"[Playwright] Scrape error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        finally:
+            # Clean up resources
+            if self.page:
+                await self.page.close()
+                self.page = None
+            if self.context:
+                await self.context.close()
+                self.context = None
+
+    async def _execute_playwright_steps(self, steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Execute multiple playwright steps sequentially for testing purposes.
+
+        Args:
+            steps: List of step configurations
+
+        Returns:
+            Dict containing execution results
+        """
+        try:
+            self.context = await self.browser.new_context(
+                ignore_https_errors=True,
+            )
+            self.page = await self.context.new_page()
+
+            results = []
+            for step in steps:
+                step_result = await self._execute_single_playwright_step(step)
+                if step_result:
+                    results.append(step_result)
+
+            return {
+                "success": True,
+                "count": len(results),
+                "message": f"Successfully executed {len(results)} steps",
+                "results": results
+            }
+        except Exception as e:
+            print(f"[Playwright] Error executing steps: {str(e)}")
+            return {
+                "success": False,
+                "count": 0,
+                "message": f"Error executing steps: {str(e)}",
+                "results": []
+            }
+
+    async def _execute_single_playwright_step(self, step: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Execute a single playwright step.
+
+        Args:
+            step: Step configuration dictionary
+
+        Returns:
+            Dict containing step execution results or None if failed
+        """
+        try:
+            url = step.get("url")
+            if not url:
+                return None
+
+            # Set up context options
+            headers = step.get("headers", {})
+            user_agent = step.get("user_agent")
+            viewport = step.get("viewport")
+            proxy = step.get("proxy")
+
+            # Create new page with context options if needed
+            if headers or user_agent:
+                await self.context.close()
+                self.context = await self.browser.new_context(
+                    headers=headers,
+                    user_agent=user_agent,
+                    ignore_https_errors=True,
+                )
+                self.page = await self.context.new_page()
+
+            # Set viewport if specified (on the initial page)
+            if viewport:
+                from playwright.async_api import ViewportSize
+                vp = ViewportSize(width=viewport.get("width", 1280), height=viewport.get("height", 720))
+                await self.page.set_viewport_size(vp)
+
+            timeout = step.get("timeout", 10)
+
+            print(f"[Playwright] Navigating to: {url}")
+            await self.page.goto(url, timeout=timeout * 1000)
+
+            # Execute wait selector if specified
+            wait_selector = step.get("wait_selector")
+            if wait_selector:
+                print(f"[Playwright] Waiting for selector: {wait_selector}")
+                await self.page.wait_for_selector(wait_selector, timeout=timeout * 1000)
+
+            # Execute JavaScript if specified
+            javascript = step.get("execute_javascript")
+            if javascript:
+                print(f"[Playwright] Executing JavaScript...")
+                result = await self.page.evaluate(javascript)
+                return {
+                    "url": url,
+                    "javascript_result": result,
+                    "success": True
+                }
+
+            # Get page content
+            content = await self.page.content()
+            return {
+                "url": url,
+                "content_length": len(content),
+                "success": True
+            }
+        except Exception as e:
+            print(f"[Playwright] Error executing step: {str(e)}")
             return None
