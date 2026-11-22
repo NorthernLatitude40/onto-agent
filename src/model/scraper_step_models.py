@@ -3,7 +3,7 @@ Enhanced Pydantic models for scraper steps and parsing rules
 with proper separation of concerns and mutual exclusion support.
 """
 from typing import Literal, Union, Dict, Any, Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # =============================================================================
 # PARSING RULE MODELS - Mutual Exclusion Support
@@ -65,6 +65,34 @@ class PlaywrightStepConfig(BaseModel):
     wait_for_selector: Optional[str] = Field(None, description="CSS selector to wait for")
     click_selectors: Optional[List[str]] = Field(None, description="Sequence of CSS selectors to click")
     scroll_to_bottom: Optional[bool] = Field(False, description="Whether to scroll to bottom")
+    
+    @classmethod
+    def from_frontend_data(cls, data: Dict[str, Any]) -> 'PlaywrightStepConfig':
+        """
+        Convert frontend Playwright step configuration to backend model.
+        Handles field name mapping between frontend and backend.
+        """
+        # Map frontend field names to backend field names
+        mapped_data = {}
+        
+        # url -> target_url (frontend) or url (backend)
+        if 'target_url' in data and 'url' not in data:
+            mapped_data['url'] = data['target_url']
+        elif 'url' in data:
+            mapped_data['url'] = data['url']
+            
+        # wait_for_selector -> wait_selector (frontend) or wait_for_selector (backend)
+        if 'wait_selector' in data and 'wait_for_selector' not in data:
+            mapped_data['wait_for_selector'] = data['wait_selector']
+        elif 'wait_for_selector' in data:
+            mapped_data['wait_for_selector'] = data['wait_for_selector']
+        
+        # Preserve all other frontend fields that match backend field names
+        for key, value in data.items():
+            if key not in mapped_data and hasattr(cls, key):
+                mapped_data[key] = value
+        
+        return cls(**mapped_data)
 
 class StaticHtmlStepConfig(BaseModel):
     """Configuration for static HTML scraping steps"""
@@ -119,6 +147,42 @@ class ScraperStep(BaseModel):
     description: Optional[str] = Field(None, description="Step description for documentation")
     is_active: bool = Field(default=True, description="Whether this step is enabled")
 
+    @model_validator(mode='before')
+    @classmethod
+    def validate_step_format(cls, data):
+        """
+        Custom validator that handles both legacy and new step formats.
+        
+        Legacy format (old frontend):
+        - mode field indicates the type
+        - target_url, method, params_json, headers_json fields
+        
+        New format (new frontend):
+        - action_config field with proper structure
+        """
+        if isinstance(data, dict) and 'mode' in data:
+            # Legacy format - convert to new format using the adapter function
+            converted = create_step_from_legacy_data(data)
+            # Return as dict for further validation
+            return converted.model_dump()
+        elif isinstance(data, dict) and 'action_config' in data and isinstance(data['action_config'], dict):
+            # New format with action_config - apply field name mapping if needed
+            action_config = data['action_config']
+            
+            # Check if this looks like frontend data (has target_url or wait_selector)
+            has_frontend_fields = (
+                'target_url' in action_config or
+                'wait_selector' in action_config or
+                'script' in action_config
+            )
+            
+            if has_frontend_fields and action_config.get('action_type') == 'playwright':
+                # Convert frontend field names to backend field names for Playwright config
+                converted_action_config = PlaywrightStepConfig.from_frontend_data(action_config)
+                data['action_config'] = converted_action_config.model_dump()
+        
+        return data
+
 # =============================================================================
 # BACKWARD COMPATIBILITY MODELS
 # =============================================================================
@@ -148,3 +212,60 @@ def get_parsing_rule_type(rule: ParsingRule) -> str:
 def get_step_action_type(step: ScraperStep) -> str:
     """Get the action type from a step configuration"""
     return step.action_config.action_type
+
+def create_step_from_legacy_data(data: Dict[str, Any]) -> ScraperStep:
+    """
+    Create a ScraperStep from legacy frontend data format.
+    Handles field name mapping and conversion for backward compatibility.
+    """
+    # Determine action type based on mode
+    mode = data.get('mode', 'api')
+    
+    if mode == 'playwright':
+        # Create PlaywrightStepConfig with proper field mapping
+        playwright_data = {
+            'action_type': 'playwright',
+            'url': data.get('target_url', data.get('url', '')),
+            'wait_for_selector': data.get('wait_selector', data.get('wait_for_selector')),
+        }
+        
+        # Copy additional Playwright-specific fields if they exist
+        playwright_fields = ['script', 'playwright_headers', 'proxy', 'timeout', 'user_agent', 'viewport']
+        for field in playwright_fields:
+            if field in data:
+                playwright_data[field] = data[field]
+        
+        action_config = PlaywrightStepConfig(**playwright_data)
+    elif mode == 'api':
+        # Create ApiStepConfig
+        api_data = {
+            'action_type': 'api',
+            'url': data.get('target_url', data.get('url', '')),
+            'method': data.get('method', 'GET'),
+            'params': data.get('params'),
+            'headers': data.get('headers'),
+        }
+        action_config = ApiStepConfig(**api_data)
+    else:
+        # Default to API mode
+        api_data = {
+            'action_type': 'api',
+            'url': data.get('target_url', data.get('url', '')),
+            'method': data.get('method', 'GET'),
+        }
+        action_config = ApiStepConfig(**api_data)
+    
+    # Create parsing rules if present
+    parsing_rule = None
+    if 'parsing_rules' in data:
+        parsing_rule = data['parsing_rules']
+    
+    return ScraperStep(
+        step_name=data.get('name', 'Unnamed Step'),
+        action_config=action_config,
+        parsing_rules=parsing_rule,
+        delay=data.get('delay'),
+        retry_count=data.get('retry_count'),
+        description=data.get('description'),
+        is_active=data.get('is_active', True)
+    )

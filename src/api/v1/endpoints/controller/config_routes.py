@@ -52,7 +52,7 @@ def get_scraper_configs():
     summary="创建新的爬虫配置",
 )
 def create_scraper_config(
-    config_data: ScraperConfigCreate = Body(..., example=docs.CREATE_CONFIG_EXAMPLE),
+    config_data: ScraperConfigCreate = Body(..., examples=docs.CREATE_CONFIG_EXAMPLE),
 ):
     try:
         # Create the scraper config
@@ -127,7 +127,7 @@ def get_scraper_config(config_id: int):
 
             # 確保 config_data 現在是字典，然後再進行合併
             if isinstance(config_data, dict):
-                for key in ["method", "params", "headers", "delay", "retry_count", "parsing_rules"]:
+                for key in ["method", "params", "headers", "delay", "retry_count", "parsing_rules", "action_config"]:
                     if key in config_data:
                         step_dict[key] = config_data[key]
         
@@ -148,7 +148,7 @@ def get_scraper_config(config_id: int):
 )
 def update_scraper_config(
     config_id: int,
-    config_data: ScraperConfigUpdate = Body(..., example=docs.UPDATE_CONFIG_EXAMPLE),
+    config_data: ScraperConfigUpdate = Body(..., examples=docs.UPDATE_CONFIG_EXAMPLE),
 ):
     fields = {
         k: getattr(config_data, k)
@@ -177,6 +177,45 @@ def update_scraper_config(
         if config_data.steps:
             config_repo.create_steps(config_id, config_data.steps)
     
+    # Add steps to the config - convert raw step data to ScraperStep models
+    raw_steps = config_repo.get_steps_by_config_id(config_id)
+    steps = []
+    for step in raw_steps:
+        # Convert target_type back to mode field
+        step_dict = {
+            "id": step["id"],
+            "name": step["name"],
+            "mode": step.get("target_type", "api"),  # Map target_type to mode
+            "target_url": step["target_url"],
+        }
+        
+        # Merge config data into step_dict
+        if step.get("config"):
+            config_data = step["config"]
+            
+            # 如果 config_data 是字串，先將其解析為 Python 字典
+            if isinstance(config_data, str):
+                try:
+                    config_data = json.loads(config_data)
+                except json.JSONDecodeError as e:
+                    # 處理 JSON 格式錯誤的情況
+                    print(f"JSON 解析失敗: {e}")
+                    config_data = {}
+            
+            # 確保 config_data 現在是字典，然後再進行合併
+            if isinstance(config_data, dict):
+                for key in ["method", "params", "headers", "delay", "retry_count", "parsing_rules", "action_config"]:
+                    if key in config_data:
+                        step_dict[key] = config_data[key]
+        
+        # Create ScraperStep instance
+        steps.append(ScraperStep(**step_dict))
+    
+    config["steps"] = steps
+    try:
+        config["stats"] = config_repo.get_run_stats(config_id)
+    except Exception as e:
+        raise _db_error(e)
     return config
 
 

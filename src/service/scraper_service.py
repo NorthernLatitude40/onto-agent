@@ -53,6 +53,7 @@ class ScraperService:
     
     def __init__(self):
         self.playwright_scraper = PlaywrightScraper()
+        self._current_config_id = None
 
     async def execute_scrape(
         self,
@@ -78,6 +79,9 @@ class ScraperService:
         Raises:
             HTTPException: If database operations or network requests fail
         """
+        # Record current config_id for use in storage methods
+        self._current_config_id = config_id
+        
         # Load configuration from database
         config_data = self._load_scraper_config(config_id)
         headers_data = config_data["headers"]
@@ -122,7 +126,7 @@ class ScraperService:
                 "vehicles": []
             }
         
-        print(f"成功解析到 {len(scraped_vehicles)} 辆车型数据，开始写入数据库...")
+        print(f"成功抓取到 {len(scraped_vehicles)} 条数据项，开始写入数据库...")
         
         # Split data into multiple files if exceeding 400 rows
         if len(scraped_vehicles) > 400:
@@ -133,7 +137,7 @@ class ScraperService:
         return {
             "success": True,
             "count": len(scraped_vehicles),
-            "message": f"成功抓取并存储 {len(scraped_vehicles)} 辆车型数据",
+            "message": f"成功抓取并存储 {len(scraped_vehicles)} 条数据项",
             "vehicles": scraped_vehicles
         }
     
@@ -214,7 +218,7 @@ class ScraperService:
         time.sleep(delay)
         
         # Step 2: Get vehicle list
-        print("正在访问目标网站抓取车型数据...")
+        print("正在访问目标网站抓取数据...")
         response = session.post(step2_url, json=common_params, headers=headers, timeout=timeout)
         
         # Log API response
@@ -424,7 +428,7 @@ class ScraperService:
         if "steps" in config_data and config_data["steps"]:
             return self._execute_sequential_steps(config_data, session)
         
-        print(f"正在访问目标网站抓取车型数据...")
+        print(f"正在访问目标网站抓取数据...")
         
         # Add rate limiting with random delay
         delay = random.uniform(1.0, 3.0)
@@ -559,9 +563,9 @@ class ScraperService:
                 # This is a CrawlerStepsModel instance - convert to dict
                 step_dict = {
                     "name": getattr(step, 'name', ''),
-                    "scrape_mode": "api",  # Default mode for API steps
+                    "scrape_mode": step.config.get("scrape_mode", "api") if step.config else "api",  # Default mode for API steps
                     "url": getattr(step, 'target_url', ''),
-                    "method": "POST",
+                    "method": step.config.get("method", "GET") if step.config else "GET",
                     "params": step.config.get("params") if step.config else {},
                     "headers": step.config.get("headers") if step.config else {},
                     "timeout": timeout,
@@ -606,10 +610,15 @@ class ScraperService:
                     if (len(steps)-1)==step_idx:
                         if isinstance(result, list) and result:  # Only extend if non-empty list
                             scraped_vehicles.extend(result)
-                        elif isinstance(result, dict) and "cars" in result:
-                            # Handle API response format with cars array
-                            processed_vehicles = self._process_api_response(result, step_dict, context)
-                            scraped_vehicles.extend(processed_vehicles)
+                        elif isinstance(result, dict):
+                            # Handle both cars array format and other dict responses
+                            if "cars" in result:
+                                # Handle API response format with cars array
+                                processed_vehicles = self._process_api_response(result, step_dict, context)
+                                scraped_vehicles.extend(processed_vehicles)
+                            else:
+                                # For other dict responses (e.g., from non-JSON HTML parsing), convert to list
+                                scraped_vehicles.append(result)
         
         return scraped_vehicles
     
@@ -622,7 +631,7 @@ class ScraperService:
             context: Context containing session, timeout, and previous results
             
         Returns:
-            Response data from the API call
+            Response data from the API call (dict or list)
         """
         session = context["session"]
         timeout = context["timeout"]
@@ -647,9 +656,18 @@ class ScraperService:
                 print(f"[!] 不支持的 HTTP 方法: {method}")
                 return None
 
-            # Log API response
+            # Check if response contains JSON data
+            content_type = response.headers.get('Content-Type', '')
+            is_json = 'application/json' in content_type.lower()
+            
+            # Log API response with safe JSON parsing
             step_name = step.get("name", "unknown_step")
-            self._log_api_response(step_name, interpolated_params, response.json(), response.status_code)
+            if is_json:
+                json_data = response.json()
+                self._log_api_response(step_name, interpolated_params, json_data, response.status_code)
+            else:
+                # For non-JSON responses, log the text content
+                self._log_api_response(step_name, interpolated_params, {"response_text": response.text[:500]}, response.status_code)
 
             if response.status_code != 200:
                 print(f"[!] API 调用失败，状态码: {response.status_code}")
@@ -657,17 +675,80 @@ class ScraperService:
                 print("伺服器返回的詳細錯誤內容：", response.text)
                 return None
 
-            # Parse JSON response
-            try:
-                data = response.json()
-                print(f"[+] 步骤完成，获取到 {len(data)} 条数据")
-                return data
-            except ValueError:
-                print("[!] 无法解析 JSON 响应")
-                return None
+            # Parse JSON response (only if it's actually JSON)
+            if is_json:
+                try:
+                    data = response.json()
+                    print(f"[+] 步骤完成，获取到 {len(data)} 条数据")
+                    return data
+                except ValueError:
+                    print("[!] 无法解析 JSON 响应")
+                    return None
+            else:
+                # For non-JSON responses (e.g., HTML), check if parsing rules are configured
+                html_content = response.text
+                print(f"[+] 步骤完成，获取到文本响应 ({len(html_content)} 字符)")
                 
+                # Check for parsing_rules in step configuration OR use config-level parsing rules from context
+                from src.service.parsing_utils import apply_parsing_rules, apply_css_selector_rule
+                
+                # Get parsing rules - check step first, then fall back to config-level rules
+                parsing_rules = None
+                if "parsing_rules" in step and step["parsing_rules"]:
+                    parsing_rules = step["parsing_rules"]
+                    print(f"[+] 使用步骤级解析规则: {len(parsing_rules)} 条规则")
+                elif "config_parsing_rules" in context and context["config_parsing_rules"]:
+                    parsing_rules = context["config_parsing_rules"]
+                    print(f"[+] 使用配置级解析规则: {len(parsing_rules)} 条规则")
+                
+                if parsing_rules:
+                    
+                    # Check if any rule has css_selector - extract elements directly
+                    css_selectors = [rule.get("css_selector") for rule in parsing_rules if rule.get("css_selector")]
+                    
+                    if css_selectors:
+                        # Extract matching elements using CSS selector
+                        from src.service.parsing_utils import apply_css_selector_rule
+                        extracted_elements = apply_css_selector_rule(html_content, css_selectors[0])
+                        
+                        if extracted_elements:
+                            # Handle both single string and list of strings
+                            if isinstance(extracted_elements, str):
+                                # Single element - wrap in list
+                                result_list = [{"element": extracted_elements, "index": 0}]
+                            else:
+                                # Multiple elements
+                                result_list = []
+                                for i, element_text in enumerate(extracted_elements):
+                                    result_list.append({"element": element_text, "index": i})
+                            
+                            print(f"[+] 通过CSS选择器提取到 {len(result_list)} 个元素")
+                            return result_list
+                        else:
+                            # No elements matched - fall back to raw HTML
+                            print("[!] CSS选择器未匹配到任何元素，返回原始内容")
+                            return [{"html": html_content}]
+                    
+                    # Apply parsing rules to extract structured data (for mappings-based rules)
+                    parsed_data = apply_parsing_rules(html_content, parsing_rules)
+                    
+                    if parsed_data and len(parsed_data) > 0:
+                        # Return the parsed structured data directly as a list
+                        result_list = [parsed_data]
+                        print(f"[+] 解析完成，提取到 {len(result_list)} 条结构化数据")
+                        return result_list
+                    else:
+                        # If parsing rules didn't match, return raw HTML as a single item
+                        print("[!] 解析规则未匹配到任何数据，返回原始内容")
+                        return [{"response_text": html_content}]
+                else:
+                    # No parsing rules configured - wrap text in dictionary list format
+                    print(f"[+] 未配置解析规则，返回原始文本内容 ({len(html_content)} 字符)")
+                    return [{"response_text": html_content}]
         except Exception as e:
             print(f"[!] API 调用错误: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _interpolate_parameters(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -849,13 +930,14 @@ class ScraperService:
             if 'conn' in locals():
                 conn.close()
     
-    def _split_and_store_scraped_vehicles(self, vehicles: List[Dict[str, Any]], parsing_rules: Optional[List[Dict[str, Any]]] = None) -> None:
+    def _split_and_store_scraped_vehicles(self, vehicles: List[Dict[str, Any]], parsing_rules: Optional[List[Dict[str, Any]]] = None, config_id: Optional[int] = None) -> None:
         """
         Split scraped vehicle data into multiple files and store them.
         
         Args:
             vehicles: List of vehicle dictionaries to split and store
             parsing_rules: Optional list of parsing rules to apply before storing
+            config_id: Optional config_id override for storage methods
             
         Raises:
             HTTPException: If database operations fail
@@ -872,7 +954,7 @@ class ScraperService:
             chunk = vehicles[start_idx:end_idx]
             
             print(f"处理分片 {i+1}/{num_chunks} (行 {start_idx+1}-{end_idx})...")
-            self._store_scraped_vehicles(chunk, parsing_rules)
+            self._store_scraped_vehicles(chunk, parsing_rules, config_id)
     
     def _log_api_response(
         self,
@@ -920,13 +1002,14 @@ class ScraperService:
             if 'conn' in locals():
                 conn.close()
 
-    def _store_scraped_vehicles(self, vehicles: List[Dict[str, Any]], parsing_rules: Optional[List[Dict[str, Any]]] = None) -> None:
+    def _store_scraped_vehicles(self, vehicles: List[Dict[str, Any]], parsing_rules: Optional[List[Dict[str, Any]]] = None, config_id: Optional[int] = None) -> None:
         """
         Store scraped vehicle data into the database.
-
+        
         Args:
             vehicles: List of vehicle dictionaries to store
             parsing_rules: Optional list of parsing rules to apply before storing
+            config_id: Optional config_id override for storage methods
             
         Raises:
             HTTPException: If database operations fail
@@ -946,8 +1029,30 @@ class ScraperService:
                     else:
                         # If no parsing rules matched, use original data
                         processed_vehicles.append(v)
+            else:
+                # When no parsing rules provided, use vehicles as-is
+                processed_vehicles = vehicles
+
+            # Determine which config_id to use
+            effective_config_id = config_id if config_id is not None else self._current_config_id
 
             for v in processed_vehicles:
+                # Check if this record belongs to rental vehicle structure
+                has_model_name = "model_name" in v and bool(v.get("model_name"))
+                has_rental_fields = any(
+                    field in v and bool(v.get(field))
+                    for field in ["berths", "transmission", "price_nzd"]
+                )
+                
+                # If not a rental vehicle record, store as scraped item instead
+                if not has_model_name or (not has_rental_fields):
+                    self._store_scraped_items(
+                        [v],
+                        config_id=effective_config_id,
+                        step_name=None,
+                        source_url=v.get("source_url", None)
+                    )
+                    continue
                 cur.execute(
                     """
                     INSERT INTO van_models (model_name, berths, transmission, specs)
@@ -982,7 +1087,74 @@ class ScraperService:
                 )
             
             conn.commit()
-            print("🎉 结构化车型与价格数据已成功入库！")
+            print("🎉 结构化数据已成功入库！")
+            
+        except Exception as e:
+            if 'conn' in locals():
+                conn.rollback()
+            print(f"数据库写入出错: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"数据库操作失败: {str(e)}"
+            )
+        finally:
+            if 'cur' in locals():
+                cur.close()
+            if 'conn' in locals():
+                conn.close()
+    
+    def _store_scraped_items(
+        self,
+        items: List[Dict[str, Any]],
+        config_id: Optional[int] = None,
+        step_name: Optional[str] = None,
+        source_url: Optional[str] = None
+    ) -> None:
+        """
+        Store scraped items into the scraped_items table.
+        
+        Args:
+            items: List of item dictionaries to store
+            config_id: The scraper configuration ID (optional, will use self._current_config_id if not provided)
+            step_name: Optional name of the scraping step
+            source_url: Optional URL where data was scraped from
+            
+        Raises:
+            HTTPException: If database operations fail
+        """
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            
+            # Determine which config_id to use
+            effective_config_id = config_id if config_id is not None else self._current_config_id
+            
+            for item in items:
+                # Extract title from item (use a common field or create a summary)
+                title = item.get("title", "")
+                if not title and "model_name" in item:
+                    title = str(item.get("model_name", ""))
+                
+                # Convert Decimal objects to strings for JSON serialization
+                item_data = json.loads(json.dumps(item, default=str))
+                data_json = json.dumps(item_data)
+                
+                cur.execute(
+                    """
+                    INSERT INTO scraped_items (config_id, step_name, source_url, title, data)
+                    VALUES (%s, %s, %s, %s, %s);
+                    """,
+                    (
+                        effective_config_id,
+                        step_name,
+                        source_url,
+                        title,
+                        data_json
+                    )
+                )
+            
+            conn.commit()
+            print(f"📦 成功存储 {len(items)} 条抓取项到 scraped_items 表！")
             
         except Exception as e:
             if 'conn' in locals():

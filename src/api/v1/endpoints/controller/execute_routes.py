@@ -43,7 +43,7 @@ async def _run_and_record(run_id: int, config_id: int, **kwargs):
 )
 async def execute_scrape(
     background_tasks: BackgroundTasks,  # injected by FastAPI; do NOT wrap in Depends
-    config_request: ExecuteScrapeRequest = Body(..., example=docs.EXECUTE_EXAMPLE),
+    config_request: ExecuteScrapeRequest = Body(..., examples=docs.EXECUTE_EXAMPLE),
 ):
     try:
         run_id = config_repo.start_run(config_request.config_id)

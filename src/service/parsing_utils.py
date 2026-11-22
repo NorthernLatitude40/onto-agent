@@ -157,7 +157,8 @@ def apply_parsing_rule(data: Any, rules: List[Dict[str, Any]]) -> Optional[Dict[
             mappings = rule.get("mappings")
             
             # 如果沒有 mappings，可以根據需求看是否處理單一規則
-            if not mappings:
+            # 但是 css_selector 和 xpath 需要能夠在沒有 mappings 的情況下工作
+            if not mappings and parser_type not in ["css_selector", "xpath"]:
                 continue
 
             # 3. 走訪當前規則的 mappings 進行多欄位對應
@@ -181,7 +182,7 @@ def apply_parsing_rule(data: Any, rules: List[Dict[str, Any]]) -> Optional[Dict[
                     parsed_value = apply_regex_rule(str(data), regex_pattern)
                 else:
                     continue
-
+                
                 # 型態轉換處理 (確保結果能安全轉成字串或保留結構)
                 if parsed_value is not None and not isinstance(parsed_value, (str, int, float, bool, list)):
                     try:
@@ -191,6 +192,12 @@ def apply_parsing_rule(data: Any, rules: List[Dict[str, Any]]) -> Optional[Dict[
                 
                 # 4. 塞進共用的字典裏
                 vehicle_data[target_field] = parsed_value
+            
+            # Handle css_selector without mappings - extract elements directly
+            if not mappings and parser_type == "css_selector" and css_selector:
+                extracted_elements = apply_css_selector_rule(str(data), css_selector)
+                if extracted_elements is not None:
+                    vehicle_data["extracted_elements"] = extracted_elements
         
         # 5. 所有規則跑完後，一次回傳合併後的字典
         return vehicle_data

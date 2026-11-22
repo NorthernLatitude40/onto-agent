@@ -189,6 +189,7 @@ def create_steps(config_id: int, steps_data) -> list:
                 "parsing_rules": parsing_rules,
                 "delay": step_dict.get("delay"),
                 "retry_count": step_dict.get("retry_count"),
+                "action_config": step_dict.get("action_config"),
             }
             config_json = json.dumps(config_dict)
             
@@ -198,7 +199,7 @@ def create_steps(config_id: int, steps_data) -> list:
                 INSERT INTO crawler_steps
                     (scraper_config_id, name, target_type, target_url, config)
                 VALUES (%s, %s, %s, %s, %s)
-                RETURNING id, scraper_config_id, name, target_type, target_url, enabled;
+                RETURNING id, scraper_config_id, name, target_type, target_url, enabled, config;
                 """,
                 (config_id, name, target_type, target_url, config_json),
             )
@@ -211,6 +212,7 @@ def create_steps(config_id: int, steps_data) -> list:
                     "target_type": result[3],
                     "target_url": result[4],
                     "enabled": result[5],
+                    "config": result[6],
                 })
     
     return created_steps
