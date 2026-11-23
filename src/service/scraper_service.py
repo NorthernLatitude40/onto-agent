@@ -106,7 +106,28 @@ class ScraperService:
                 else:
                     # Fallback to original execute_scrape method
                     scrape_result = await self.playwright_scraper.execute_scrape(config_data)
-                    if scrape_result and "vehicles" in scrape_result:
+                    
+                    if scrape_result and "html" in scrape_result:
+                        # Handle HTML response from Playwright general scraping mode
+                        html_content = scrape_result["html"]
+                        print(f"[+] 从 Playwright 获取到 HTML 内容 ({len(html_content)} 字符)")
+                        
+                        # Apply parsing rules to extract structured data
+                        if effective_parsing_rules:
+                            from src.service.parsing_utils import parse_html_with_rules
+                            result = parse_html_with_rules(html_content, effective_parsing_rules)
+                            
+                            if isinstance(result, list):
+                                scraped_vehicles = result
+                                print(f"[+] 解析完成，提取到 {len(scraped_vehicles)} 条结构化数据")
+                            else:
+                                # If single item returned, wrap in list
+                                scraped_vehicles = [result]
+                                print("[+] 解析完成，提取到 1 条结构化数据")
+                        else:
+                            # No parsing rules - store raw HTML as text content
+                            scraped_vehicles = [{"response_text": html_content}]
+                    elif scrape_result and "vehicles" in scrape_result:
                         scraped_vehicles = scrape_result["vehicles"]
                     else:
                         scraped_vehicles = []
@@ -559,21 +580,26 @@ class ScraperService:
         
         for step_idx, step in enumerate(steps):
             # Convert CrawlerStepsModel instance to dict if needed
-            if hasattr(step, 'config'):
-                # This is a CrawlerStepsModel instance - convert to dict
+            if hasattr(step, "config"):
+                step_cfg = step.config if isinstance(step.config, dict) else {}
                 step_dict = {
-                    "name": getattr(step, 'name', ''),
-                    "scrape_mode": step.config.get("scrape_mode", "api") if step.config else "api",  # Default mode for API steps
-                    "url": getattr(step, 'target_url', ''),
-                    "method": step.config.get("method", "GET") if step.config else "GET",
-                    "params": step.config.get("params") if step.config else {},
-                    "headers": step.config.get("headers") if step.config else {},
+                    "name": getattr(step, "name", ""),
+                    "scrape_mode": step_cfg.get("scrape_mode", "api"),
+                    "url": getattr(step, "target_url", ""),
+                    "method": step_cfg.get("method", "GET"),
+                    "params": step_cfg.get("params") or {},
+                    "headers": step_cfg.get("headers") or {},
+                    "parsing_rules": step_cfg.get("parsing_rules"),
                     "timeout": timeout,
-                    "is_active": getattr(step, 'enabled', True),
+                    "is_active": getattr(step, "enabled", True),
+                    "is_final_step": step_cfg.get("is_final_step", False),
                 }
                 # Check if is_final_step is in the step's config JSON
                 if step.config and isinstance(step.config, dict):
                     step_dict["is_final_step"] = step.config.get("is_final_step", False)
+                    # Preserve parsing_rules from step config
+                    if "parsing_rules" in step.config:
+                        step_dict["parsing_rules"] = step.config["parsing_rules"]
                 else:
                     step_dict["is_final_step"] = False
             else:
@@ -690,7 +716,7 @@ class ScraperService:
                 print(f"[+] 步骤完成，获取到文本响应 ({len(html_content)} 字符)")
                 
                 # Check for parsing_rules in step configuration OR use config-level parsing rules from context
-                from src.service.parsing_utils import apply_parsing_rules, apply_css_selector_rule
+                from src.service.parsing_utils import parse_html_with_rules, apply_parsing_rules
                 
                 # Get parsing rules - check step first, then fall back to config-level rules
                 parsing_rules = None
@@ -702,45 +728,16 @@ class ScraperService:
                     print(f"[+] 使用配置级解析规则: {len(parsing_rules)} 条规则")
                 
                 if parsing_rules:
+                    # Use the new parse_html_with_rules function for proper multi-item extraction
+                    result = parse_html_with_rules(html_content, parsing_rules)
                     
-                    # Check if any rule has css_selector - extract elements directly
-                    css_selectors = [rule.get("css_selector") for rule in parsing_rules if rule.get("css_selector")]
-                    
-                    if css_selectors:
-                        # Extract matching elements using CSS selector
-                        from src.service.parsing_utils import apply_css_selector_rule
-                        extracted_elements = apply_css_selector_rule(html_content, css_selectors[0])
-                        
-                        if extracted_elements:
-                            # Handle both single string and list of strings
-                            if isinstance(extracted_elements, str):
-                                # Single element - wrap in list
-                                result_list = [{"element": extracted_elements, "index": 0}]
-                            else:
-                                # Multiple elements
-                                result_list = []
-                                for i, element_text in enumerate(extracted_elements):
-                                    result_list.append({"element": element_text, "index": i})
-                            
-                            print(f"[+] 通过CSS选择器提取到 {len(result_list)} 个元素")
-                            return result_list
-                        else:
-                            # No elements matched - fall back to raw HTML
-                            print("[!] CSS选择器未匹配到任何元素，返回原始内容")
-                            return [{"html": html_content}]
-                    
-                    # Apply parsing rules to extract structured data (for mappings-based rules)
-                    parsed_data = apply_parsing_rules(html_content, parsing_rules)
-                    
-                    if parsed_data and len(parsed_data) > 0:
-                        # Return the parsed structured data directly as a list
-                        result_list = [parsed_data]
-                        print(f"[+] 解析完成，提取到 {len(result_list)} 条结构化数据")
-                        return result_list
+                    if isinstance(result, list):
+                        print(f"[+] 解析完成，提取到 {len(result)} 条结构化数据")
+                        return result
                     else:
-                        # If parsing rules didn't match, return raw HTML as a single item
-                        print("[!] 解析规则未匹配到任何数据，返回原始内容")
-                        return [{"response_text": html_content}]
+                        # If single item returned, wrap in list
+                        print("[+] 解析完成，提取到 1 条结构化数据")
+                        return [result]
                 else:
                     # No parsing rules configured - wrap text in dictionary list format
                     print(f"[+] 未配置解析规则，返回原始文本内容 ({len(html_content)} 字符)")
