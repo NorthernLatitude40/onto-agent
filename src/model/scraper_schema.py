@@ -13,6 +13,9 @@ class Mapping(BaseModel):
     """Mapping between source and target fields"""
     source_key: str = Field(..., description="Source key/path to extract from")
     target_field: str = Field(..., description="Target field name in result")
+    type: Optional[str] = Field(None, description="Selector type: 'css_selector', 'css', 'xpath'")
+    model_id: Optional[str] = Field(None, description="Target database model ID (for multi-model scenarios)")
+    attr: Optional[str] = Field(None, description="Attribute selector for CSS/XPath (Playwright mode)")
 
 class ParsingRule(BaseModel):
     """Data parsing rule with multiple parser support"""

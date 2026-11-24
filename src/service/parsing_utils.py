@@ -161,7 +161,7 @@ def apply_parsing_rule(data: Any, rules: List[Dict[str, Any]]) -> Optional[Dict[
         
         # 2. 走訪 rules 數組中的每一個規則
         for rule in rules:
-            parser_type = rule.get("name")
+            parser_type = rule.get("parser_type") or rule.get("name")  # Fallback to name for backward compatibility
             base_jsonpath = rule.get("jsonpath")
             css_selector = rule.get("css_selector")
             xpath_expr = rule.get("xpath")
@@ -172,22 +172,26 @@ def apply_parsing_rule(data: Any, rules: List[Dict[str, Any]]) -> Optional[Dict[
             # 但是 css_selector 和 xpath 需要能夠在沒有 mappings 的情況下工作
             if not mappings and parser_type not in ["css_selector", "xpath"]:
                 continue
-
+            
             # 3. 走訪當前規則的 mappings 進行多欄位對應
             for m in mappings:
                 source_key = m.get("source_key")
                 target_field = m.get("target_field")
+                attr = m.get("attr")
                 
                 if not target_field:
                     continue
                     
                 parsed_value = None
-
+                
                 # 根據不同類型解析
                 if parser_type == "jsonpath" and source_key:
                     parsed_value = apply_jsonpath_rule(data, source_key, target_field)
-                elif parser_type == "css_selector" and css_selector:
-                    parsed_value = apply_css_selector_rule(str(data), css_selector)
+                elif parser_type == "css_selector":
+                    if css_selector:
+                        parsed_value = apply_css_selector_rule(str(data), css_selector, attr)
+                    elif source_key:  # Support source_key as selector for backward compatibility
+                        parsed_value = apply_css_selector_rule(str(data), source_key, attr)
                 elif parser_type == "xpath" and xpath_expr:
                     parsed_value = apply_xpath_rule(str(data), xpath_expr)
                 elif parser_type == "regex" and regex_pattern:
