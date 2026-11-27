@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import re
 import json
 import html
+import traceback
 from lxml import etree
 
 
@@ -38,7 +39,8 @@ def apply_jsonpath_rule(data: Any, expression: str, target_field: str) -> Any:
         else:
             return matches
     except Exception as e:
-        print(f"JSONPath parsing error: {e}")
+        print(f"JSONPath parsing error (expression={expression!r}, field={target_field!r}): {e}")
+        traceback.print_exc()
         return None
 
 
@@ -162,11 +164,15 @@ def apply_parsing_rule(data: Any, rules: List[Dict[str, Any]]) -> Optional[Dict[
         # 2. 走訪 rules 數組中的每一個規則
         for rule in rules:
             parser_type = rule.get("parser_type") or rule.get("name")  # Fallback to name for backward compatibility
+            # 規則只要帶有 JSONPath 特徵（jsonpath 欄位 / mappings 的 source_key 以 $ 開頭等），
+            # 且沒有明確指定 css_selector/xpath/regex，就按 jsonpath 處理（name 可能是任意業務名稱）
+            if is_jsonpath_rule(rule) and parser_type not in ("css_selector", "xpath", "regex"):
+                parser_type = "jsonpath"
             base_jsonpath = rule.get("jsonpath")
             css_selector = rule.get("css_selector")
             xpath_expr = rule.get("xpath")
             regex_pattern = rule.get("regex")
-            mappings = rule.get("mappings")
+            mappings = rule.get("mappings") or []
             
             # 如果沒有 mappings，可以根據需求看是否處理單一規則
             # 但是 css_selector 和 xpath 需要能夠在沒有 mappings 的情況下工作
@@ -185,8 +191,20 @@ def apply_parsing_rule(data: Any, rules: List[Dict[str, Any]]) -> Optional[Dict[
                 parsed_value = None
                 
                 # 根據不同類型解析
-                if parser_type == "jsonpath" and source_key:
-                    parsed_value = apply_jsonpath_rule(data, source_key, target_field)
+                jsonpath_expr = source_key or m.get("selector")
+                if parser_type == "jsonpath" and jsonpath_expr:
+                    # If data is a list, apply JSONPath to each item
+                    if isinstance(data, list) and len(data) > 0:
+                        parsed_value = []
+                        for item in data:
+                            item_result = apply_jsonpath_rule(item, jsonpath_expr, target_field)
+                            if item_result is not None:
+                                parsed_value.append(item_result)
+                        # Use first result or all results
+                        if parsed_value:
+                            parsed_value = parsed_value[0] if len(parsed_value) == 1 else parsed_value
+                    else:
+                        parsed_value = apply_jsonpath_rule(data, jsonpath_expr, target_field)
                 elif parser_type == "css_selector":
                     if css_selector:
                         parsed_value = apply_css_selector_rule(str(data), css_selector, attr)
@@ -220,6 +238,7 @@ def apply_parsing_rule(data: Any, rules: List[Dict[str, Any]]) -> Optional[Dict[
     
     except Exception as e: 
         print(f"Error applying parsing rules: {e}")
+        traceback.print_exc()
         return None
 
 
@@ -258,6 +277,97 @@ def _get_attr_or_key(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _starts_with_dollar(value: Any) -> bool:
+    """安全判斷值是否為以 $ 開頭的字串（None / 非字串一律視為 False）。"""
+    return isinstance(value, str) and value.strip().startswith("$")
+
+
+def is_jsonpath_rule(rule: Any) -> bool:
+    """
+    判斷單條解析規則是否為 JSONPath 規則。
+
+    命中任一條件即視為 JSONPath：
+    - 外層 name / parser_type 為 "jsonpath"
+    - 外層存在非空的 jsonpath 欄位
+    - 外層 selector / source_key 以 $ 開頭
+    - mappings 中任一項的 source_key / selector 以 $ 開頭（None 值安全處理）
+    """
+    if rule is None:
+        return False
+
+    for key in ("parser_type", "name"):
+        val = _get_attr_or_key(rule, key)
+        if isinstance(val, str) and val.strip().lower() == "jsonpath":
+            return True
+
+    if _get_attr_or_key(rule, "jsonpath"):
+        return True
+
+    for key in ("selector", "source_key"):
+        if _starts_with_dollar(_get_attr_or_key(rule, key)):
+            return True
+
+    mappings = _get_attr_or_key(rule, "mappings")
+    if isinstance(mappings, list):
+        for m in mappings:
+            if m is None:
+                continue
+            for key in ("source_key", "selector"):
+                if _starts_with_dollar(_get_attr_or_key(m, key)):
+                    return True
+
+    return False
+
+
+def has_jsonpath_rules(rules: Optional[List[Any]]) -> bool:
+    """規則列表中是否存在任一 JSONPath 規則。"""
+    if not rules:
+        return False
+    return any(is_jsonpath_rule(r) for r in rules)
+
+
+def expand_parsed_result(result: Any) -> List[Dict[str, Any]]:
+    """
+    把 apply_parsing_rules 的返回值規整為「記錄列表」。
+
+    - list：原樣返回（過濾空項）
+    - dict：若有字段值是 list（如 $.data[*].title 抽出多個值），按位置展開成多條記錄；
+            非 list 的字段值廣播到每一條記錄
+    - 全部字段都是 None / 空 dict：返回 []（避免把「什麼都沒匹配到」當成 1 條數據）
+    """
+    if result is None:
+        return []
+
+    if isinstance(result, list):
+        return [r for r in result if r not in (None, {}, [])]
+
+    if isinstance(result, dict):
+        if not any(v is not None for v in result.values()):
+            return []
+
+        list_lengths = [len(v) for v in result.values() if isinstance(v, list)]
+        num_records = max(list_lengths) if list_lengths else 0
+
+        if num_records > 1:
+            if len(set(list_lengths)) > 1:
+                print(f"[!] JSONPath 各字段匹配條數不一致: {sorted(set(list_lengths))}，按位置對齊，缺失的位置該字段留空")
+            expanded: List[Dict[str, Any]] = []
+            for i in range(num_records):
+                item: Dict[str, Any] = {}
+                for key, value in result.items():
+                    if isinstance(value, list):
+                        if i < len(value):
+                            item[key] = value[i]
+                    else:
+                        item[key] = value
+                expanded.append(item)
+            return expanded
+
+        return [result]
+
+    return [{"value": result}]
 
 
 def parse_html_with_rules(
@@ -416,3 +526,52 @@ def parse_html_with_rules(
         import traceback
         traceback.print_exc()
         return []
+
+
+def parse_json_with_rules(data: Any, rules: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    使用 JSONPath 和其他规则解析 JSON 数据。
+    
+    Args:
+        data: API 响应数据（可以是单个 dict 或列表）
+        rules: 解析规则列表
+        
+    Returns:
+        解析后的数据字典
+        
+    Notes:
+        - 处理单个 dict 和列表响应
+        - 对于列表，对每个项应用规则并返回所有结果
+        - 使用 apply_parsing_rule 进行实际 JSONPath 解析
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    if not rules:
+        return {}
+    
+    # 确保数据是列表（即使单个 dict，也包装成列表以便统一处理）
+    items_to_parse = data if isinstance(data, list) else [data]
+    
+    parsed_items = []
+    item_count = len(items_to_parse)
+    
+    logger.info(f"[JSON 解析] 开始解析 {item_count} 个项目使用 JSONPath 规则")
+    
+    for idx, item in enumerate(items_to_parse):
+        try:
+            # 对每个项应用所有规则
+            parsed_item = apply_parsing_rules(item, rules)
+            if parsed_item:
+                parsed_items.append(parsed_item)
+        except Exception as e:
+            logger.error(f"[JSON 解析] 解析项目 {idx+1}/{item_count} 失败: {e}", exc_info=True)
+    
+    result = {
+        'items': parsed_items,
+        'count': len(parsed_items),
+        'success': True
+    }
+    
+    logger.info(f"[JSON 解析] 完成。成功解析 {result['count']}/{item_count} 个项目")
+    return result

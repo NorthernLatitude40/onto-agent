@@ -2,10 +2,16 @@ from decimal import Decimal
 import os
 import json
 import datetime
+import hashlib
 import requests
 from bs4 import BeautifulSoup
 import psycopg2
 from dotenv import load_dotenv
+try:
+    import jsonpath
+    JSONPATH_AVAILABLE = True
+except ImportError:
+    JSONPATH_AVAILABLE = False
 
 load_dotenv()
 
@@ -203,12 +209,34 @@ def scrape_and_store_vehicles(target_url="https://getlostinnz.co.nz/", headers=N
             )
             
         conn.commit()
-        result = {
-            "success": True,
-            "count": len(scraped_vehicles),
-            "message": f"成功抓取并存储 {len(scraped_vehicles)} 辆车型数据",
-            "vehicles": scraped_vehicles
-        }
+        
+        # Apply universal parsing rules if configured
+        universal_rules_result = apply_universal_parsing_rules(response.text, target_url)
+        
+        # Store results in scraped_items table
+        if universal_rules_result and len(universal_rules_result) > 0:
+            store_scraped_items(cur, conn, universal_rules_result)
+            # Log success for scraped_items storage
+            if universal_rules_result and len(universal_rules_result) > 0:
+                print(f"成功存储通用解析结果到scraped_items表: config_id={config_id}, run_id={run_id}, 条目数={len(universal_rules_result)}")
+            else:
+                print("未配置通用解析规则或无数据，跳过scraped_items存储")
+            result = {
+                "success": True,
+                "count": len(scraped_vehicles),
+                "universal_count": len(universal_rules_result),
+                "message": f"成功抓取并存储 {len(scraped_vehicles)} 辆车型数据，{len(universal_rules_result)} 条通用解析结果",
+                "vehicles": scraped_vehicles
+            }
+        else:
+            result = {
+                "success": True,
+                "count": len(scraped_vehicles),
+                "universal_count": 0,
+                "message": f"成功抓取并存储 {len(scraped_vehicles)} 辆车型数据",
+                "vehicles": scraped_vehicles
+            }
+        
         print("🎉 结构化车型与价格数据已成功入库！")
         return result
         
@@ -218,6 +246,149 @@ def scrape_and_store_vehicles(target_url="https://getlostinnz.co.nz/", headers=N
     finally:
         cur.close()
         conn.close()
+
+def apply_universal_parsing_rules(html_content: str, source_url: str):
+    """
+    Apply universal parsing rules to extract structured data from HTML content.
+    
+    Args:
+        html_content: The HTML content to parse
+        source_url: The URL where the content was scraped from
+        
+    Returns:
+        List of dicts containing extracted data with dedup_key
+    """
+    # In a real implementation, this would read from scraper_configs.universal_parsing_rules
+    # For now, return empty list to maintain backward compatibility
+    print("检查通用解析规则配置...")
+    
+    # TODO: Read universal_parsing_rules from database for the current config_id
+    # This is a placeholder - actual implementation would query scraper_configs table
+    universal_rules = []  # Get from scraper_configs.universal_parsing_rules where id=config_id
+    
+    use_default_mapping = False
+    if not universal_rules:
+        print("未配置自定义通用解析规则，将使用预设通用映射逻辑")
+        use_default_mapping = True
+    else:
+        print("已配置自定义通用解析规则，应用中...")
+    
+    scraped_items = []
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+
+    # Apply default universal mapping if no custom rules configured
+    if use_default_mapping:
+        print("应用预设通用映射逻辑...")
+        
+        # Extract basic metadata from the page
+        title = soup.title.string.strip() if soup.title and soup.title.string else "未知标题"
+        
+        # Create a default scraped item entry
+        dedup_hash = hashlib.md5(f"{source_url}|default_mapping".encode()).hexdigest()
+        
+        scraped_items.append({
+            "config_id": 35,  # TODO: Get from actual config
+            "run_id": None,   # TODO: Get from crawler_runs
+            "step_name": "universal_parsing",
+            "source_url": source_url,
+            "title": title,
+            "data": {
+                "page_title": title,
+                "source_url": source_url,
+                "step_name": "universal_parsing"
+            },
+            "dedup_key": dedup_hash
+        })
+    for rule in universal_rules:
+        try:
+            extracted_value = None
+            selector_type = rule.get('selector_type', 'css_selector')
+            expression = rule.get('expression')
+            output_field = rule.get('output_field')
+            
+            if not expression or not output_field:
+                continue
+            
+            # Apply different extraction methods based on selector type
+            if selector_type == 'jsonpath':
+                # Parse HTML to JSON first for jsonpath (simplified)
+                # In real implementation, would need proper HTML->JSON conversion
+                pass
+            elif selector_type == 'css_selector':
+                element = soup.select_one(expression)
+                extracted_value = element.get_text(strip=True) if element else None
+            elif selector_type == 'xpath':
+                # Would use lxml for xpath in real implementation
+                pass
+            elif selector_type == 'regex':
+                import re
+                pattern = rule.get('pattern', expression)
+                flags = 0
+                if rule.get('flags'):
+                    if 'multiline' in rule['flags']:
+                        flags |= re.MULTILINE
+                    if 'case_insensitive' in rule['flags']:
+                        flags |= re.IGNORECASE
+                match = re.search(pattern, html_content, flags)
+                extracted_value = match.group(0) if match else None
+            
+            if extracted_value is not None:
+                # Generate dedup_key based on URL and field
+                dedup_hash = hashlib.md5(f"{source_url}|{output_field}|{extracted_value}".encode()).hexdigest()
+                
+                scraped_items.append({
+                    'config_id': 35,  # TODO: Get from actual config
+                    'run_id': None,   # TODO: Get from crawler_runs
+                    'step_name': 'universal_parsing',
+                    'source_url': source_url,
+                    'title': rule.get('rule_name', '通用解析结果'),
+                    'data': {output_field: extracted_value},
+                    'dedup_key': dedup_hash
+                })
+        
+        except Exception as e:
+            print(f"应用通用解析规则时出错 (规则: {rule.get('rule_name')}): {e}")
+            continue
+    
+    return scraped_items
+
+def store_scraped_items(cur, conn, items):
+    """
+    Store scraped items in the scraped_items table.
+    
+    Args:
+        cur: Database cursor
+        conn: Database connection
+        items: List of dicts containing scraped item data
+    """
+    if not items:
+        return
+    
+    try:
+        for item in items:
+            # Insert into scraped_items table
+            cur.execute("""
+                INSERT INTO scraped_items (
+                    config_id, run_id, step_name, source_url, title, data, dedup_key
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (dedup_key) DO NOTHING;
+            """, (
+                item['config_id'],
+                item['run_id'],
+                item['step_name'],
+                item['source_url'],
+                item['title'],
+                json.dumps(item['data']),
+                item['dedup_key']
+            ))
+        
+        conn.commit()
+        print(f"成功存储 {len(items)} 条通用解析结果到 scraped_items 表")
+    except Exception as e:
+        conn.rollback()
+        print(f"存储 scraped_items 时出错: {e}")
+        raise
 
 if __name__ == "__main__":
     result = scrape_and_store_vehicles()

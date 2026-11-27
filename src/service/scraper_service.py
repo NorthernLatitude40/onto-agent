@@ -2,6 +2,9 @@
 Vehicle Scraper Service
 Provides business logic for vehicle data scraping operations
 """
+import hashlib
+import logging
+import traceback
 from datetime import datetime, timezone
 
 import requests
@@ -22,7 +25,13 @@ from fastapi import HTTPException, status
 from decimal import Decimal
 
 # Import parsing utilities
-from src.service.parsing_utils import apply_parsing_rules
+from src.service.parsing_utils import (
+    apply_parsing_rules,
+    parse_html_with_rules,
+    has_jsonpath_rules,
+    is_jsonpath_rule,
+    expand_parsed_result,
+)
 
 # Import Scrapling framework
 # Import Scrapling framework (optional)
@@ -37,6 +46,8 @@ except ImportError:
 from .playwright_scraper import PlaywrightScraper
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -54,10 +65,12 @@ class ScraperService:
     def __init__(self):
         self.playwright_scraper = PlaywrightScraper()
         self._current_config_id = None
+        self._current_run_id = None
 
     async def execute_scrape(
         self,
         config_id: int,
+        run_id: Optional[int] = None,
         mode: Optional[str] = None,
         parsing_rules: Optional[List[Dict[str, Any]]] = None
     ) -> Optional[Dict[str, Any]]:
@@ -79,8 +92,9 @@ class ScraperService:
         Raises:
             HTTPException: If database operations or network requests fail
         """
-        # Record current config_id for use in storage methods
+        # Record current config_id and run_id for use in storage methods
         self._current_config_id = config_id
+        self._current_run_id = run_id
         
         # Load configuration from database
         config_data = self._load_scraper_config(config_id)
@@ -112,18 +126,11 @@ class ScraperService:
                         html_content = scrape_result["html"]
                         print(f"[+] 从 Playwright 获取到 HTML 内容 ({len(html_content)} 字符)")
                         
-                        # Apply parsing rules to extract structured data
+                        # Apply parsing rules to extract structured data (JSON -> JSONPath, HTML -> CSS/XPath)
                         if effective_parsing_rules:
-                            from src.service.parsing_utils import parse_html_with_rules
-                            result = parse_html_with_rules(html_content, effective_parsing_rules)
-                            
-                            if isinstance(result, list):
-                                scraped_vehicles = result
-                                print(f"[+] 解析完成，提取到 {len(scraped_vehicles)} 条结构化数据")
-                            else:
-                                # If single item returned, wrap in list
-                                scraped_vehicles = [result]
-                                print("[+] 解析完成，提取到 1 条结构化数据")
+                            scraped_vehicles = self._parse_content_with_rules(
+                                html_content, effective_parsing_rules, "Playwright"
+                            )
                         else:
                             # No parsing rules - store raw HTML as text content
                             scraped_vehicles = [{"response_text": html_content}]
@@ -137,9 +144,12 @@ class ScraperService:
         
         except Exception as api_error:
             print(f"API 调用错误: {api_error}")
+            traceback.print_exc()
+            logger.error("[execute_scrape] 抓取失败 config_id=%s run_id=%s: %s", config_id, run_id, api_error, exc_info=True)
             scraped_vehicles = []
         
         if not scraped_vehicles:
+            print(f"[!] 未解析到任何数据: config_id={config_id}, run_id={run_id}, 解析条数=0")
             return {
                 "success": False,
                 "count": 0,
@@ -147,13 +157,18 @@ class ScraperService:
                 "vehicles": []
             }
         
-        print(f"成功抓取到 {len(scraped_vehicles)} 条数据项，开始写入数据库...")
+        print(f"成功抓取到 {len(scraped_vehicles)} 条数据项 (config_id={config_id}, run_id={run_id})，开始写入数据库...")
         
-        # Split data into multiple files if exceeding 400 rows
+        # Split data into multiple chunks if exceeding 400 rows; config_id/run_id are passed explicitly
         if len(scraped_vehicles) > 400:
-            self._split_and_store_scraped_vehicles(scraped_vehicles, effective_parsing_rules)
+            stats = self._split_and_store_scraped_vehicles(scraped_vehicles, effective_parsing_rules, config_id, run_id)
         else:
-            self._store_scraped_vehicles(scraped_vehicles, effective_parsing_rules)
+            stats = self._store_scraped_vehicles(scraped_vehicles, effective_parsing_rules, config_id, run_id)
+        
+        print(
+            f"[完成] config_id={config_id}, run_id={run_id}, 解析条数={len(scraped_vehicles)}, "
+            f"scraped_items 写入 {stats.get('scraped_items', 0)} 条, 业务表写入 {stats.get('vehicles', 0)} 条"
+        )
         
         return {
             "success": True,
@@ -352,6 +367,7 @@ class ScraperService:
                 if key not in params:
                     print(f"[!] Warning: 'default_params.{key}' not configured, using default value")
     
+    
     def _scrape_with_requests(self, config_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Scrape vehicle data using the requests library (original implementation).
@@ -362,6 +378,9 @@ class ScraperService:
         Returns:
             List of scraped vehicle dictionaries
         """
+        # Get parsing rules from config if not already extracted
+        effective_parsing_rules = self._extract_parsing_rules_from_config(config_data)
+        
         nonce = None
         timeout = config_data["timeout"]
         print("[+] 使用 requests 库进行数据抓取...")
@@ -383,12 +402,32 @@ class ScraperService:
         self._validate_config_data(config_data)
         
         target_url = config_data.get("target_url", "https://getlostinnz.co.nz/")
+        has_steps = bool(config_data.get("steps"))
         print("[-] 正在訪問首頁以初始化 Session 並獲取 Cookie...")
         response = session.get(target_url)
-        if response.status_code != 200:
-            print(f"[!] 訪問首頁失敗，狀態碼: {response.status_code}")
-            return []
-        print("[+] 首頁訪問成功！已自動取得 Cookie。")
+        home_ok = response.status_code == 200
+        if not home_ok:
+            logger.warning("[爬虫请求] 首页访问失败，状态码: %s", response.status_code)
+            if not has_steps:
+                return []
+            # 配置了 steps：首页只是用来初始化 Session/Cookie/Nonce，失败也要继续执行后续步骤
+            print(f"[!] 首页访问失败 (状态码 {response.status_code})，但配置了 steps，继续执行步骤...")
+        else:
+            print("[+] 首頁訪問成功！已自動取得 Cookie。")
+
+        # 首页解析：仅当首页本身就是目标数据（例如直接返回 JSON API 数据）时才产出结果。
+        # 带 steps 的配置，解析规则通常是针对步骤 API 的 JSONPath，首页(HTML)无法也不应套用，
+        # 此时必须继续往下执行 _execute_sequential_steps，而不是 return [] 截断。
+        if home_ok and effective_parsing_rules:
+            home_items = self._parse_content_with_rules(response.text, effective_parsing_rules, "首页")
+            if home_items:
+                print(f"[+] 首页解析得到 {len(home_items)} 条数据，run_id={self._current_run_id}，将由 execute_scrape 统一写入")
+                return home_items
+            if has_steps:
+                print("[-] 首页不是目标数据 / 解析结果为空，继续执行 steps 步骤式抓取...")
+            else:
+                print("[!] 首页解析结果为空，且未配置 steps，返回空结果")
+                return []
         
         # Extract nonce from HTML
         nonce_match = re.search(r'"nonce"\s*:\s*"([a-f0-9]+)"', response.text)
@@ -554,10 +593,11 @@ class ScraperService:
         
         except Exception as api_error:
             print(f"API 调用错误: {api_error}")
+            traceback.print_exc()
             return []
         
         return scraped_vehicles
-    
+
     def _execute_sequential_steps(self, config_data: Dict[str, Any], session: requests.Session) -> List[Dict[str, Any]]:
         """
         Execute sequential API requests based on steps configuration.
@@ -633,7 +673,7 @@ class ScraperService:
                     context[f"result_{step_idx}"] = result
                     
                     # Check if this is a final step that returns vehicles
-                    if (len(steps)-1)==step_idx:
+                    if step_dict.get("is_final_step") or (len(steps)-1)==step_idx:
                         if isinstance(result, list) and result:  # Only extend if non-empty list
                             scraped_vehicles.extend(result)
                         elif isinstance(result, dict):
@@ -645,7 +685,10 @@ class ScraperService:
                             else:
                                 # For other dict responses (e.g., from non-JSON HTML parsing), convert to list
                                 scraped_vehicles.append(result)
+                else:
+                    print(f"[!] 步骤 {step_idx + 1}/{len(steps)} ({step_dict.get('name', '未命名步骤')}) 未返回数据 (API 失败或解析为空)")
         
+        print(f"[+] 步骤式抓取完成，共收集 {len(scraped_vehicles)} 条数据")
         return scraped_vehicles
     
     def _execute_api_step(self, step: Dict[str, Any], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -701,53 +744,96 @@ class ScraperService:
                 print("伺服器返回的詳細錯誤內容：", response.text)
                 return None
 
-            # Parse JSON response (only if it's actually JSON)
+            step_name = step.get("name", "unknown_step")
+
+            # Get parsing rules - check step first, then fall back to config-level rules
+            parsing_rules = None
+            if step.get("parsing_rules"):
+                parsing_rules = step["parsing_rules"]
+                print(f"[+] 使用步骤级解析规则: {len(parsing_rules)} 条规则")
+            elif context.get("config_parsing_rules"):
+                parsing_rules = context["config_parsing_rules"]
+                print(f"[+] 使用配置级解析规则: {len(parsing_rules)} 条规则")
+
             if is_json:
-                try:
-                    data = response.json()
-                    print(f"[+] 步骤完成，获取到 {len(data)} 条数据")
-                    return data
-                except ValueError:
-                    print("[!] 无法解析 JSON 响应")
-                    return None
-            else:
-                # For non-JSON responses (e.g., HTML), check if parsing rules are configured
-                html_content = response.text
-                print(f"[+] 步骤完成，获取到文本响应 ({len(html_content)} 字符)")
-                
-                # Check for parsing_rules in step configuration OR use config-level parsing rules from context
-                from src.service.parsing_utils import parse_html_with_rules, apply_parsing_rules
-                
-                # Get parsing rules - check step first, then fall back to config-level rules
-                parsing_rules = None
-                if "parsing_rules" in step and step["parsing_rules"]:
-                    parsing_rules = step["parsing_rules"]
-                    print(f"[+] 使用步骤级解析规则: {len(parsing_rules)} 条规则")
-                elif "config_parsing_rules" in context and context["config_parsing_rules"]:
-                    parsing_rules = context["config_parsing_rules"]
-                    print(f"[+] 使用配置级解析规则: {len(parsing_rules)} 条规则")
-                
+                # json_data was parsed above (response.json() raises ValueError for invalid JSON,
+                # which is handled by the outer except with a full traceback)
                 if parsing_rules:
-                    # Use the new parse_html_with_rules function for proper multi-item extraction
-                    result = parse_html_with_rules(html_content, parsing_rules)
-                    
-                    if isinstance(result, list):
-                        print(f"[+] 解析完成，提取到 {len(result)} 条结构化数据")
-                        return result
-                    else:
-                        # If single item returned, wrap in list
-                        print("[+] 解析完成，提取到 1 条结构化数据")
-                        return [result]
-                else:
-                    # No parsing rules configured - wrap text in dictionary list format
-                    print(f"[+] 未配置解析规则，返回原始文本内容 ({len(html_content)} 字符)")
-                    return [{"response_text": html_content}]
+                    return self._parse_content_with_rules(json_data, parsing_rules, f"步骤[{step_name}]")
+
+                # No parsing rules - return raw data
+                if isinstance(json_data, list):
+                    print(f"[+] 步骤完成，获取到 {len(json_data)} 条数据")
+                    return json_data
+                print("[+] 步骤完成，获取到单个对象")
+                return [json_data]
+
+            # Non-JSON content-type (e.g. HTML, or JSON served as text/html)
+            html_content = response.text
+            print(f"[+] 步骤完成，获取到文本响应 ({len(html_content)} 字符)")
+            if parsing_rules:
+                return self._parse_content_with_rules(html_content, parsing_rules, f"步骤[{step_name}]")
+
+            # No parsing rules configured - wrap text in dictionary list format
+            print(f"[+] 未配置解析规则，返回原始文本内容 ({len(html_content)} 字符)")
+            return [{"response_text": html_content}]
         except Exception as e:
             print(f"[!] API 调用错误: {e}")
             import traceback
             traceback.print_exc()
             return None
     
+    def _parse_content_with_rules(self, content: Any, rules: List[Dict[str, Any]], label: str = "") -> List[Dict[str, Any]]:
+        """
+        Parse a response body (JSON dict/list, JSON text, or HTML text) with parsing rules.
+
+        - JSON + JSONPath rules  -> apply_parsing_rules(json_data, rules) (2 args), then expand
+          per-field arrays into independent records
+        - JSON + other rules     -> apply_parsing_rules(json_data, rules)
+        - non-JSON (HTML) text   -> parse_html_with_rules, but ONLY with the non-JSONPath rules:
+                                    JSONPath expressions must never be treated as CSS selectors
+
+        Returns:
+            List of record dicts (possibly empty). Never raises for "no data"; real errors propagate.
+        """
+        json_data = None
+        is_json = False
+        if isinstance(content, (dict, list)):
+            json_data = content
+            is_json = True
+        elif isinstance(content, (str, bytes)):
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, (dict, list)):
+                    json_data = parsed
+                    is_json = True
+            except ValueError:
+                pass  # Not JSON -> HTML parsing below
+
+        jsonpath_present = has_jsonpath_rules(rules)
+
+        if is_json:
+            kind = "JSONPath" if jsonpath_present else "JSON"
+            result = apply_parsing_rules(json_data, rules)
+            items = expand_parsed_result(result)
+            print(f"[+] {label} {kind} 解析完成，提取到 {len(items)} 条结构化数据")
+            return items
+
+        if jsonpath_present:
+            html_rules = [r for r in rules if not is_jsonpath_rule(r)]
+            if not html_rules:
+                print(f"[-] {label} 响应不是 JSON，JSONPath 规则不适用，跳过解析 (不会当作 CSS 选择器)")
+                return []
+            print(f"[-] {label} 响应不是 JSON，忽略 {len(rules) - len(html_rules)} 条 JSONPath 规则，仅用 {len(html_rules)} 条 HTML 规则解析")
+        else:
+            html_rules = rules
+
+        text = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
+        result = parse_html_with_rules(text, html_rules)
+        items = result if isinstance(result, list) else ([result] if result else [])
+        print(f"[+] {label} HTML 解析完成，提取到 {len(items)} 条结构化数据")
+        return items
+
     def _interpolate_parameters(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Interpolate parameters using values from previous steps.
@@ -802,28 +888,69 @@ class ScraperService:
         Returns:
             List of processed vehicle dictionaries
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         vehicles = []
-        cars = response_data.get("cars", [])
         
-        print(f"[+] 处理 {len(cars)} 辆车型...")
+        # 检测响应内容类型 - JSON vs HTML
+        has_cars_key = "cars" in response_data
+        is_json_response = isinstance(response_data, dict) and (has_cars_key or len(response_data) > 0)
         
-        for car in cars:
-            # Extract basic vehicle information
-            vehicle_entry = {
-                "model_name": car.get("vehiclecategory", "Unknown Model"),
-                "berths": car.get("numberofadults", 2),
-                "transmission": "Unknown",
-                "specs": {},
-                "price_nzd": Decimal('0.0'),
-                "pickup_date": context.get("pickupdate", "2026-11-10"),
-                "return_date": context.get("dropoffdate", "2026-12-17"),
-                "pickup_location": context.get("location_key", "christchurch"),
-                "return_location": context.get("gl_location", "christchurch"),
-                "start_time": context.get("pickuptime", "10:00"),
-                "end_time": context.get("dropofftime", "10:00"),
-            }
+        if is_json_response:
+            # JSON 响应：使用 cars 数组或整个响应数据
+            cars = response_data.get("cars", [])
+            data_to_parse = cars if isinstance(cars, list) and len(cars) > 0 else [response_data]
             
-            vehicles.append(vehicle_entry)
+            logger.info(f"[API 响应处理] 检测到 JSON 响应，处理 {len(data_to_parse)} 个项目")
+            
+            for idx, car in enumerate(data_to_parse):
+                try:
+                    # 提取基本车辆信息
+                    vehicle_entry = {
+                        "model_name": car.get("vehiclecategory", "Unknown Model"),
+                        "berths": car.get("numberofadults", 2),
+                        "transmission": "Unknown",
+                        "specs": {},
+                        "price_nzd": Decimal('0.0'),
+                        "pickup_date": context.get("pickupdate", "2026-11-10"),
+                        "return_date": context.get("dropoffdate", "2026-12-17"),
+                        "pickup_location": context.get("location_key", "christchurch"),
+                        "return_location": context.get("gl_location", "christchurch"),
+                        "start_time": context.get("pickuptime", "10:00"),
+                        "end_time": context.get("dropofftime", "10:00"),
+                    }
+                    
+                    vehicles.append(vehicle_entry)
+                except Exception as e:
+                    logger.error(f"[API 响应处理] 处理项目 {idx+1}/{len(data_to_parse)} 失败: {e}", exc_info=True)
+            
+            logger.info(f"[API 响应处理] JSON 完成。成功处理 {len(vehicles)}/{len(data_to_parse)} 个项目")
+        else:
+            # HTML 响应：使用现有逻辑
+            cars = response_data.get("cars", [])
+            
+            logger.info(f"[API 响应处理] 检测到 HTML 响应，处理 {len(cars)} 辆车型...")
+            
+            for car in cars:
+                # Extract basic vehicle information
+                vehicle_entry = {
+                    "model_name": car.get("vehiclecategory", "Unknown Model"),
+                    "berths": car.get("numberofadults", 2),
+                    "transmission": "Unknown",
+                    "specs": {},
+                    "price_nzd": Decimal('0.0'),
+                    "pickup_date": context.get("pickupdate", "2026-11-10"),
+                    "return_date": context.get("dropoffdate", "2026-12-17"),
+                    "pickup_location": context.get("location_key", "christchurch"),
+                    "return_location": context.get("gl_location", "christchurch"),
+                    "start_time": context.get("pickuptime", "10:00"),
+                    "end_time": context.get("dropofftime", "10:00"),
+                }
+                
+                vehicles.append(vehicle_entry)
+            
+            logger.info(f"[API 响应处理] HTML 完成。成功处理 {len(vehicles)} 辆车型")
         
         return vehicles
     
@@ -915,8 +1042,11 @@ class ScraperService:
             
             return config_data
         
+        except HTTPException:
+            raise
         except Exception as e:
             print(f"数据库查询出错: {e}")
+            traceback.print_exc()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"数据库查询失败: {str(e)}"
@@ -927,32 +1057,47 @@ class ScraperService:
             if 'conn' in locals():
                 conn.close()
     
-    def _split_and_store_scraped_vehicles(self, vehicles: List[Dict[str, Any]], parsing_rules: Optional[List[Dict[str, Any]]] = None, config_id: Optional[int] = None) -> None:
+    def _split_and_store_scraped_vehicles(
+        self,
+        vehicles: List[Dict[str, Any]],
+        parsing_rules: Optional[List[Dict[str, Any]]] = None,
+        config_id: Optional[int] = None,
+        run_id: Optional[int] = None
+    ) -> Dict[str, int]:
         """
-        Split scraped vehicle data into multiple files and store them.
-        
+        Split scraped vehicle data into chunks and store them.
+
         Args:
             vehicles: List of vehicle dictionaries to split and store
             parsing_rules: Optional list of parsing rules to apply before storing
             config_id: Optional config_id override for storage methods
-            
+            run_id: Optional run_id override for storage methods
+
+        Returns:
+            Aggregated {"vehicles": n, "scraped_items": m} across all chunks
+
         Raises:
             HTTPException: If database operations fail
         """
         # Calculate number of chunks needed (400 rows per file)
         chunk_size = 400
         num_chunks = (len(vehicles) + chunk_size - 1) // chunk_size
-        
+
         print(f"数据超过 400 行，将拆分为 {num_chunks} 个文件...")
-        
+
+        total = {"vehicles": 0, "scraped_items": 0}
         for i in range(num_chunks):
             start_idx = i * chunk_size
             end_idx = min(start_idx + chunk_size, len(vehicles))
             chunk = vehicles[start_idx:end_idx]
-            
+
             print(f"处理分片 {i+1}/{num_chunks} (行 {start_idx+1}-{end_idx})...")
-            self._store_scraped_vehicles(chunk, parsing_rules, config_id)
-    
+            stats = self._store_scraped_vehicles(chunk, parsing_rules, config_id, run_id)
+            total["vehicles"] += stats.get("vehicles", 0)
+            total["scraped_items"] += stats.get("scraped_items", 0)
+        return total
+
+
     def _log_api_response(
         self,
         api_name: str,
@@ -999,39 +1144,68 @@ class ScraperService:
             if 'conn' in locals():
                 conn.close()
 
-    def _store_scraped_vehicles(self, vehicles: List[Dict[str, Any]], parsing_rules: Optional[List[Dict[str, Any]]] = None, config_id: Optional[int] = None) -> None:
+    def _store_scraped_vehicles(
+        self,
+        vehicles: List[Dict[str, Any]],
+        parsing_rules: Optional[List[Dict[str, Any]]] = None,
+        config_id: Optional[int] = None,
+        run_id: Optional[int] = None
+    ) -> Dict[str, int]:
         """
         Store scraped vehicle data into the database.
-        
+
+        Rental-vehicle records go to van_models / pricing_inventory (unchanged);
+        every other record goes to scraped_items.
+
         Args:
             vehicles: List of vehicle dictionaries to store
             parsing_rules: Optional list of parsing rules to apply before storing
             config_id: Optional config_id override for storage methods
-            
+            run_id: Optional run_id override for storage methods
+
+        Returns:
+            {"vehicles": <rows written to business tables>, "scraped_items": <rows written to scraped_items>}
+
         Raises:
             HTTPException: If database operations fail
         """
+        effective_config_id = config_id if config_id is not None else self._current_config_id
+        effective_run_id = run_id if run_id is not None else self._current_run_id
+        business_count = 0
+        items_count = 0
+
         try:
             conn = psycopg2.connect(DATABASE_URL)
             cur = conn.cursor()
-            
+
             # Apply parsing rules if provided
             processed_vehicles = []
+            vehicle_count = len(vehicles)
+
+            logger.info(
+                "[存储车辆] 开始处理 %s 条数据, config_id=%s, run_id=%s",
+                vehicle_count, effective_config_id, effective_run_id
+            )
+
             if parsing_rules and len(parsing_rules) > 0:
-                for v in vehicles:
-                    # Apply all parsing rules to each vehicle
-                    parsed_data = apply_parsing_rules(v, parsing_rules)
-                    if parsed_data:
-                        processed_vehicles.append(parsed_data)
-                    else:
-                        # If no parsing rules matched, use original data
-                        processed_vehicles.append(v)
+                for idx, v in enumerate(vehicles):
+                    try:
+                        # Apply all parsing rules to each vehicle
+                        parsed_data = apply_parsing_rules(v, parsing_rules)
+                        # apply_parsing_rules fills unmatched fields with None, so a dict whose values are
+                        # all None means "nothing matched" (e.g. v is already parsed): keep the original data.
+                        if parsed_data and any(val is not None for val in parsed_data.values()):
+                            processed_vehicles.append(parsed_data)
+                        else:
+                            processed_vehicles.append(v)
+                    except Exception as e:
+                        logger.error(f"[存储车辆] 处理项目 {idx+1}/{vehicle_count} 失败: {e}", exc_info=True)
+                        traceback.print_exc()
             else:
                 # When no parsing rules provided, use vehicles as-is
                 processed_vehicles = vehicles
 
-            # Determine which config_id to use
-            effective_config_id = config_id if config_id is not None else self._current_config_id
+            items_for_scraped_table: List[Dict[str, Any]] = []
 
             for v in processed_vehicles:
                 # Check if this record belongs to rental vehicle structure
@@ -1040,15 +1214,10 @@ class ScraperService:
                     field in v and bool(v.get(field))
                     for field in ["berths", "transmission", "price_nzd"]
                 )
-                
+
                 # If not a rental vehicle record, store as scraped item instead
                 if not has_model_name or (not has_rental_fields):
-                    self._store_scraped_items(
-                        [v],
-                        config_id=effective_config_id,
-                        step_name=None,
-                        source_url=v.get("source_url", None)
-                    )
+                    items_for_scraped_table.append(v)
                     continue
                 cur.execute(
                     """
@@ -1070,7 +1239,7 @@ class ScraperService:
                         detail="Failed to get model_id after insertion"
                     )
                 model_id = result[0]
-                
+
                 # Insert into pricing_inventory table
                 cur.execute(
                     """
@@ -1082,14 +1251,42 @@ class ScraperService:
                     (model_id, v.get("price_nzd"),
                      v.get("pickup_location"), v.get("return_location"), v.get("start_time"), v.get("end_time"))
                 )
-            
+                business_count += 1
+                
+                # Add to scraped_items table as well (dual-write for rental items)
+                items_for_scraped_table.append(v)
+
+            if items_for_scraped_table:
+                items_count = self._store_scraped_items(
+                    items_for_scraped_table,
+                    config_id=effective_config_id,
+                    run_id=effective_run_id,
+                    step_name=None
+                )
+
             conn.commit()
+
+            summary = (
+                f"[存储汇总] config_id={effective_config_id}, run_id={effective_run_id}, "
+                f"输入 {vehicle_count} 条, 业务表(van_models/pricing_inventory)写入 {business_count} 条, "
+                f"scraped_items 写入 {items_count} 条 (待写入 {len(items_for_scraped_table)} 条)"
+            )
+            logger.info(summary)
+            print(summary)
             print("🎉 结构化数据已成功入库！")
-            
+            return {"vehicles": business_count, "scraped_items": items_count}
+
         except Exception as e:
             if 'conn' in locals():
                 conn.rollback()
-            print(f"数据库写入出错: {e}")
+            logger.error(
+                "[存储车辆] 数据库写入出错 config_id=%s run_id=%s: %s",
+                effective_config_id, effective_run_id, e, exc_info=True
+            )
+            print(f"数据库写入出错 (config_id={effective_config_id}, run_id={effective_run_id}): {e}")
+            traceback.print_exc()
+            if isinstance(e, HTTPException):
+                raise
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"数据库操作失败: {str(e)}"
@@ -1099,64 +1296,127 @@ class ScraperService:
                 cur.close()
             if 'conn' in locals():
                 conn.close()
-    
+
+
+    def _build_dedup_key(
+        self,
+        config_id: Optional[int],
+        step_name: Optional[str],
+        source_url: Optional[str],
+        title: str,
+        canonical_data: str,
+    ) -> str:
+        """
+        Build a stable dedup_key for a scraped item.
+
+        Format: "<config_id>:<step_name or ->:<sha1>", where sha1 is computed over
+        source_url + title + canonical (sorted-keys) JSON of the item. The key is
+        config-scoped, deterministic across runs (same content => same key), distinct for
+        different items even when title is empty, and always short enough for varchar columns.
+        """
+        digest = hashlib.sha1(
+            "||".join([source_url or "", title or "", canonical_data]).encode("utf-8")
+        ).hexdigest()
+        return f"{config_id if config_id is not None else '-'}:{step_name or '-'}:{digest}"
+
     def _store_scraped_items(
         self,
         items: List[Dict[str, Any]],
         config_id: Optional[int] = None,
+        run_id: Optional[int] = None,
         step_name: Optional[str] = None,
         source_url: Optional[str] = None
-    ) -> None:
+    ) -> int:
         """
-        Store scraped items into the scraped_items table.
-        
+        Store scraped items into the scraped_items table (no foreign keys).
+
         Args:
             items: List of item dictionaries to store
-            config_id: The scraper configuration ID (optional, will use self._current_config_id if not provided)
+            config_id: The scraper configuration ID (falls back to self._current_config_id)
+            run_id: The scrape run ID (falls back to self._current_run_id)
             step_name: Optional name of the scraping step
-            source_url: Optional URL where data was scraped from
-            
+            source_url: Optional URL where data was scraped from (falls back to item["source_url"])
+
+        Returns:
+            Number of rows actually inserted (rows skipped by dedup_key conflict are not counted)
+
         Raises:
             HTTPException: If database operations fail
         """
+        effective_config_id = config_id if config_id is not None else self._current_config_id
+        effective_run_id = run_id if run_id is not None else self._current_run_id
+
+        if not items:
+            print(f"📦 scraped_items: 无数据可写入 (config_id={effective_config_id}, run_id={effective_run_id})")
+            return 0
+
+        inserted = 0
         try:
             conn = psycopg2.connect(DATABASE_URL)
             cur = conn.cursor()
-            
-            # Determine which config_id to use
-            effective_config_id = config_id if config_id is not None else self._current_config_id
-            
+
             for item in items:
+                if not isinstance(item, dict):
+                    item = {"value": item}
+
                 # Extract title from item (use a common field or create a summary)
-                title = item.get("title", "")
-                if not title and "model_name" in item:
-                    title = str(item.get("model_name", ""))
-                
-                # Convert Decimal objects to strings for JSON serialization
+                title = item.get("title") or ""
+                if not title and item.get("model_name"):
+                    title = item.get("model_name")
+                title = str(title) if title else ""
+
+                item_source_url = source_url or item.get("source_url")
+                if item_source_url is not None:
+                    item_source_url = str(item_source_url)
+
+                # Convert Decimal objects etc. to strings for JSON serialization
                 item_data = json.loads(json.dumps(item, default=str))
-                data_json = json.dumps(item_data)
-                
+                data_json = json.dumps(item_data, ensure_ascii=False)
+                canonical = json.dumps(item_data, sort_keys=True, ensure_ascii=False)
+
+                dedup_key = self._build_dedup_key(
+                    effective_config_id, step_name, item_source_url, title, canonical
+                )
+
+                # ON CONFLICT DO NOTHING: safe whether or not a unique index exists on dedup_key
                 cur.execute(
                     """
-                    INSERT INTO scraped_items (config_id, step_name, source_url, title, data)
-                    VALUES (%s, %s, %s, %s, %s);
+                    INSERT INTO scraped_items (config_id, run_id, step_name, source_url, title, data, dedup_key)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING;
                     """,
                     (
                         effective_config_id,
+                        effective_run_id,
                         step_name,
-                        source_url,
+                        item_source_url,
                         title,
-                        data_json
+                        data_json,
+                        dedup_key
                     )
                 )
-            
+                if cur.rowcount and cur.rowcount > 0:
+                    inserted += cur.rowcount
+
             conn.commit()
-            print(f"📦 成功存储 {len(items)} 条抓取项到 scraped_items 表！")
-            
+            skipped = len(items) - inserted
+            msg = (
+                f"scraped_items 写入完成: config_id={effective_config_id}, run_id={effective_run_id}, "
+                f"step_name={step_name}, 待写入 {len(items)} 条, 实际写入 {inserted} 条, 重复跳过 {skipped} 条"
+            )
+            logger.info(msg)
+            print(f"📦 {msg}")
+            return inserted
+
         except Exception as e:
             if 'conn' in locals():
                 conn.rollback()
-            print(f"数据库写入出错: {e}")
+            logger.error(
+                "[scraped_items] 数据库写入出错 config_id=%s run_id=%s: %s",
+                effective_config_id, effective_run_id, e, exc_info=True
+            )
+            print(f"数据库写入出错 (scraped_items, config_id={effective_config_id}, run_id={effective_run_id}): {e}")
+            traceback.print_exc()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"数据库操作失败: {str(e)}"
@@ -1166,7 +1426,8 @@ class ScraperService:
                 cur.close()
             if 'conn' in locals():
                 conn.close()
-    
+
+
     def _extract_parsing_rules_from_config(self, config_data: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         """
         Extract parsing rules from scraper configuration.
@@ -1185,9 +1446,14 @@ class ScraperService:
                     # It's a CrawlerStepsModel instance - check the config field
                     if step.config and "parsing_rules" in step.config and step.config["parsing_rules"]:
                         return step.config["parsing_rules"]
-                elif isinstance(step, dict) and "parsing_rules" in step and step["parsing_rules"]:
-                    # It's a dictionary
-                    return step["parsing_rules"]
+                elif isinstance(step, dict):
+                    # Handle dictionary format - check both direct parsing_rules and config.parsing_rules
+                    if "parsing_rules" in step and step["parsing_rules"]:
+                        return step["parsing_rules"]
+                    elif "config" in step and isinstance(step["config"], dict):
+                        # Check nested config field
+                        if "parsing_rules" in step["config"] and step["config"]["parsing_rules"]:
+                            return step["config"]["parsing_rules"]
         
         # Check for legacy parsing rules field
         if "parsing_rules" in config_data and config_data["parsing_rules"]:
