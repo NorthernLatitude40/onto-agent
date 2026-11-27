@@ -52,3 +52,19 @@ class ScraperConfigModel(Base):
     sort_order = Column(String(64), default='desc', comment="Sort order for vehicle listings (asc/desc)")
     page_size = Column(Integer, default=20, comment="Number of vehicles per page")
     vehicle_type = Column(String(64), comment="Filter by vehicle type (e.g., 'campervan')")
+    
+    # Universal parsing rules for extracting structured data
+    universal_parsing_rules = Column(JSON, nullable=True, comment="""
+        Universal parsing rules for extracting structured fields from scrape results.
+        These rules are applied independently of business table rules and store
+        results in scraped_items table. Format:
+        [
+            {
+                "rule_name": string,
+                "selector_type": "jsonpath" | "css_selector" | "xpath" | "regex",
+                "expression": string,
+                "output_field": string,  # Field name in scraped_items.data
+                "required": boolean
+            }
+        ]
+    """)

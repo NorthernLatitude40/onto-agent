@@ -189,6 +189,7 @@ def create_steps(config_id: int, steps_data) -> list:
                 "parsing_rules": parsing_rules,
                 "delay": step_dict.get("delay"),
                 "retry_count": step_dict.get("retry_count"),
+                "action_config": step_dict.get("action_config"),
             }
             config_json = json.dumps(config_dict)
             
@@ -198,7 +199,7 @@ def create_steps(config_id: int, steps_data) -> list:
                 INSERT INTO crawler_steps
                     (scraper_config_id, name, target_type, target_url, config)
                 VALUES (%s, %s, %s, %s, %s)
-                RETURNING id, scraper_config_id, name, target_type, target_url, enabled;
+                RETURNING id, scraper_config_id, name, target_type, target_url, enabled, config;
                 """,
                 (config_id, name, target_type, target_url, config_json),
             )
@@ -211,6 +212,66 @@ def create_steps(config_id: int, steps_data) -> list:
                     "target_type": result[3],
                     "target_url": result[4],
                     "enabled": result[5],
+                    "config": result[6],
                 })
     
     return created_steps
+
+def get_run_stats(config_id: int) -> dict:
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                max(started_at),
+                count(*) FILTER (WHERE status = 'success')::float
+                    / NULLIF(count(*) FILTER (WHERE status <> 'running'), 0),
+                coalesce(sum(items_count), 0),
+                bool_or(status = 'running')
+            FROM crawler_runs
+            WHERE scraper_config_id = %s;
+            """,
+            (config_id,),
+        )
+        row = cur.fetchone()
+        # 兼容 tuple 游標和 dict 游標（依 SELECT 順序取值）
+        # 兼容 tuple 游標和 dict 游標（依 SELECT 順序取值）
+        if row is None:
+            last_run_at, success_rate, total_items, is_running = None, 0.0, 0, False
+        elif isinstance(row, dict):
+            last_run_at, success_rate, total_items, is_running = tuple(row.values())
+        else:
+            last_run_at, success_rate, total_items, is_running = row
+        return {
+            "status": "running" if is_running else "idle",
+            "last_run_at": last_run_at,
+            "success_rate": success_rate,
+            "total_items": int(total_items),
+        }
+
+def start_run(config_id: int) -> int:
+    """執行開始時寫入一筆 running 紀錄，回傳 run_id"""
+    with get_cursor() as cur:
+        cur.execute(
+            "INSERT INTO crawler_runs (scraper_config_id) VALUES (%s) RETURNING id;",
+            (config_id,),
+        )
+        result = cur.fetchone()
+        if result is None:
+            raise RuntimeError("Failed to insert crawler_run record")
+        run_id = result[0]
+        cur.connection.commit() 
+        return run_id
+
+
+def finish_run(run_id: int, success: bool, items_count: int = 0, error: str | None = None) -> None:
+    """執行結束時更新狀態、結束時間、抓取筆數、錯誤訊息"""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE crawler_runs
+            SET status = %s, finished_at = now(), items_count = %s, error_message = %s
+            WHERE id = %s;
+            """,
+            ("success" if success else "failed", items_count, error, run_id),
+        )
+        cur.connection.commit() 

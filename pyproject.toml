@@ -65,7 +65,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = [".", "src"]
+pythonpath = ["."]
 testpaths = ["test/unit"]
 timeout = 5.0
 # 1. 註冊自訂 mark，消除 PytestUnknownMarkWarning
@@ -82,3 +82,11 @@ ignore = [
     "G201",    # 允許 exc_info=True
     "DTZ005",  # 允許 datetime.now() 不帶時區
 ]
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+namespaces = true

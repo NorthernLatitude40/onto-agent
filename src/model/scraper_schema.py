@@ -2,7 +2,8 @@
 Pydantic schemas for scraper API endpoints
 """
 from typing import Optional, List, Literal, Union, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+from datetime import datetime
 
 # Step mode types
 StepMode = Literal["api", "browser", "html", "playwright","default"]
@@ -12,12 +13,15 @@ class Mapping(BaseModel):
     """Mapping between source and target fields"""
     source_key: str = Field(..., description="Source key/path to extract from")
     target_field: str = Field(..., description="Target field name in result")
+    type: Optional[str] = Field(None, description="Selector type: 'css_selector', 'css', 'xpath'")
+    model_id: Optional[str] = Field(None, description="Target database model ID (for multi-model scenarios)")
+    attr: Optional[str] = Field(None, description="Attribute selector for CSS/XPath (Playwright mode)")
 
 class ParsingRule(BaseModel):
     """Data parsing rule with multiple parser support"""
     id: Optional[str] = None
     name: str = Field(..., max_length=100, description="Rule display name")
-    target_model: str = Field(..., max_length=100, description="Model display name")
+    target_model: Optional[str] = Field(None, max_length=100, description="Model display name")
     jsonpath: Optional[str] = Field(None, description="JSONPath expression (optional)")
     css_selector: Optional[str] = Field(None, description="CSS selector (optional)")
     xpath: Optional[str] = Field(None, description="XPath expression (optional)")
@@ -27,6 +31,13 @@ class ParsingRule(BaseModel):
     required: bool = Field(default=False, description="Whether this rule is mandatory")
     
     model_config = ConfigDict()
+
+class PlaywrightActionConfig(BaseModel):
+    type: Literal["playwright"] = "playwright"
+    url: Optional[str] = None
+    wait_selector: Optional[str] = None
+    script: Optional[str] = ""
+    playwright_headers: Optional[str] = ""
 
 class ScraperStep(BaseModel):
   """Individual step in a scraper workflow with independent mode"""
@@ -68,6 +79,7 @@ class ScraperStep(BaseModel):
   target_model: Optional[str] = Field(
       None, max_length=50, description="Target database model ID for this step"
   )
+  action_config: Optional[PlaywrightActionConfig] = None
   
   model_config = ConfigDict()
 
@@ -101,6 +113,12 @@ class ScraperConfigResponse(BaseModel):
             }
         }
     )
+    
+class ScraperRunStats(BaseModel):
+    status: Literal["idle", "running"] = "idle"
+    last_run_at: Optional[datetime] = None
+    success_rate: Optional[float] = None   # 0~1，前端自行轉成百分比
+    total_items: int = 0
 
 class ScraperConfigDetailResponse(BaseModel):
     """Detailed response for a specific scraper configuration"""
@@ -114,6 +132,7 @@ class ScraperConfigDetailResponse(BaseModel):
     steps: Optional[List[ScraperStep]] = Field(None, description="Array of step configurations (new format)")
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    stats: ScraperRunStats = ScraperRunStats()
     
     model_config = ConfigDict(
         from_attributes=True,
@@ -129,6 +148,26 @@ class ScraperConfigCreate(BaseModel):
     timeout: int = Field(default=10, ge=5, le=60, description="Request timeout in seconds (5-60)")
     mode: str = Field(default="api", pattern="^(html|api|playwright)$", description="Scraping mode: 'html', 'api', or 'playwright' (legacy global mode)")
     steps: Optional[List[ScraperStep]] = Field(None, description="Array of step configurations with individual modes (new format)")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def validate_and_convert_steps(cls, values):
+        """
+        Validate and convert legacy step data format to new format.
+        Handles field name mapping between frontend and backend models.
+        """
+        if 'steps' in values:
+            converted_steps = []
+            for step_data in values['steps']:
+                # Use the adapter function from scraper_step_models
+                from src.model.scraper_step_models import create_step_from_legacy_data
+                converted_step = create_step_from_legacy_data(step_data)
+                converted_steps.append(converted_step)
+            
+            # Replace legacy steps with converted steps
+            values['steps'] = converted_steps
+        
+        return values
 
 class ScraperConfigUpdate(BaseModel):
     """Request model for updating a scraper configuration"""
@@ -146,3 +185,23 @@ class ExecuteScrapeRequest(BaseModel):
     config_id: int = Field(..., description="ID of the scraper configuration to execute")
     mode: Optional[str] = Field(None, description="Override scraping mode (html/api/playwright) - legacy global override")
     parsing_rules: Optional[List[ParsingRule]] = Field(None, description="Custom parsing rules to override step-level rules")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def validate_and_convert_steps(cls, values):
+        """
+        Validate and convert legacy step data format to new format.
+        Handles field name mapping between frontend and backend models.
+        """
+        if 'steps' in values:
+            converted_steps = []
+            for step_data in values['steps']:
+                # Use the adapter function from scraper_step_models
+                from src.model.scraper_step_models import create_step_from_legacy_data
+                converted_step = create_step_from_legacy_data(step_data)
+                converted_steps.append(converted_step)
+            
+            # Replace legacy steps with converted steps
+            values['steps'] = converted_steps
+        
+        return values

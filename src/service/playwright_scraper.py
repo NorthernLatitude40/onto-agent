@@ -45,30 +45,36 @@ class PlaywrightScraper:
         """Async context manager exit point"""
         if self.page:
             await self.page.close()
+            self.page = None
         if self.context:
             await self.context.close()
+            self.context = None
         if self.browser:
             await self.browser.close()
+            self.browser = None
         if self.playwright:
             await self.playwright.stop()
+            self.playwright = None
 
     async def execute_scrape(self, config_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Execute a vehicle scraping task using Playwright browser automation.
+        Execute a scraping task using Playwright browser automation.
 
         This method:
         1. Launches a browser context with proper headers
         2. Navigates to the target website
-        3. Extracts vehicle data using browser automation
-        4. Processes and returns the scraped data
+        3. For rental car sites: extracts vehicle data using browser automation and API calls
+        4. For general scraping: returns the HTML content for parsing
+        5. Processes and returns the scraped data
 
         Args:
             config_data: Dictionary containing scraper configuration
                 - target_url: Base URL of the website
                 - headers: HTTP headers as dict
                 - timeout: Request timeout in seconds
-                - common_params: Common request parameters
-                - step2_url, step3_url, calctotal_url: API endpoints
+                - common_params: Common request parameters (for rental sites)
+                - step2_url, step3_url, calctotal_url: API endpoints (for rental sites)
+                - scrape_mode: "rental" or "general" to determine scraping approach
 
         Returns:
             Dict containing scrape results with success status, count, message, and vehicles list
@@ -83,8 +89,27 @@ class PlaywrightScraper:
 
             base_url = config_data.get("target_url", "https://getlostinnz.co.nz/")
             timeout = config_data.get("timeout", 10)
+            scrape_mode = config_data.get("scrape_mode", "rental")
 
-            # Set up common parameters with fallbacks
+            print(f"[Playwright] 正在访问目标网站: {base_url}")
+            print(f"[Playwright] 抓取模式: {scrape_mode}")
+
+            # Navigate to the base URL
+            await self.page.goto(base_url, timeout=timeout * 1000)
+
+            # For general scraping mode, just return the HTML content
+            if scrape_mode == "general":
+                html_content = await self.page.content()
+                print(f"[Playwright] 成功获取页面 HTML 内容 ({len(html_content)} 字节)")
+                return {
+                    "success": True,
+                    "count": 1,
+                    "message": "General scraping completed",
+                    "html": html_content
+                }
+
+            # For rental car sites, extract nonce and call APIs
+            # Set up common parameters with fallbacks (rental-specific)
             if config_data.get("common_params"):
                 common_params = config_data["common_params"]
             else:
@@ -101,7 +126,7 @@ class PlaywrightScraper:
                     "gl_location": "christchurch"
                 }
 
-            # Use configurable API endpoints from config, fallback to defaults
+            # Use configurable API endpoints from config, fallback to defaults (rental-specific)
             step2_url = config_data.get(
                 "step2_url",
                 "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/step2"
@@ -115,12 +140,7 @@ class PlaywrightScraper:
                 "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/calctotal"
             )
 
-            print(f"[Playwright] 正在访问目标网站: {base_url}")
-            
-            # Navigate to the base URL to initialize session and get nonce
-            await self.page.goto(base_url, timeout=timeout * 1000)
-            
-            # Extract nonce from page content using Playwright
+            # Extract nonce from page content using Playwright (rental-specific)
             nonce = await self._extract_nonce_from_page()
             if not nonce:
                 print("[Playwright] 未能抓取到 Nonce，请检查页面结构是否变动")
@@ -135,7 +155,11 @@ class PlaywrightScraper:
 
             scraped_vehicles = []
 
-            # Call step2 API to get vehicle list
+            # For rental car sites, call APIs to get vehicle data
+            if scrape_mode == "rental":
+                scraped_vehicles = []
+                
+                # Call step2 API to get vehicle list
             step2_response = await self._call_api_with_playwright(
                 step2_url,
                 common_params,
@@ -216,7 +240,16 @@ class PlaywrightScraper:
 
                 scraped_vehicles.append(vehicle_entry)
 
-            print(f"[Playwright] 成功解析到 {len(scraped_vehicles)} 辆车型数据")
+                print(f"[Playwright] 成功解析到 {len(scraped_vehicles)} 辆车型数据")
+            else:
+                # For general scraping, we already returned HTML above
+                # This should not be reached for scrape_mode == "general"
+                return {
+                    "success": False,
+                    "count": 0,
+                    "message": "Invalid scrape mode",
+                    "vehicles": []
+                }
 
             return {
                 "success": True,
@@ -244,169 +277,6 @@ class PlaywrightScraper:
                 await self.context.close()
                 self.context = None
 
-    async def scrape_with_scrapling(
-        self, config_data: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Execute vehicle scraping using Scrapling framework.
-
-        Args:
-            config_data: Dictionary containing scraper configuration
-
-        Returns:
-            Dict containing scrape results with success status, count, message, and vehicles list
-        """
-        if not SCRAPLING_AVAILABLE:
-            print("Scrapling framework not available, using fallback method")
-            return await self.execute_scrape(config_data)
-
-        try:
-            # Create Scrapling scraper instance
-            scraper = Scraper()
-
-            # Configure the scraper based on config data
-            base_url = config_data.get("target_url", "https://getlostinnz.co.nz/")
-            timeout = config_data.get("timeout", 10)
-
-            # Set up common parameters with fallbacks
-            if config_data.get("common_params"):
-                common_params = config_data["common_params"]
-            else:
-                common_params = {
-                    "pickupdate": "2026-11-10",
-                    "dropoffdate": "2026-12-17",
-                    "ageid": 9,
-                    "pickuplocationid": 1,
-                    "dropofflocationid": 1,
-                    "pickuptime": "10:00",
-                    "dropofftime": "10:00",
-                    "vehiclecategorytypeid": 2,
-                    "location_key": "christchurch",
-                    "gl_location": "christchurch"
-                }
-
-            # Use configurable API endpoints from config, fallback to defaults
-            step2_url = config_data.get(
-                "step2_url",
-                "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/step2"
-            )
-            step3_url = config_data.get(
-                "step3_url",
-                "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/step3"
-            )
-            calctotal_url = config_data.get(
-                "calctotal_url",
-                "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/calctotal"
-            )
-
-            print(f"[Scrapling] 正在访问目标网站: {base_url}")
-
-            # Navigate to the base URL to initialize session and get nonce
-            page = await scraper.go_to(base_url, timeout=timeout)
-
-            # Extract nonce from page content using Scrapling
-            nonce = await self._extract_nonce_from_page_with_scrapling(page)
-            if not nonce:
-                print("[Scrapling] 未能抓取到 Nonce，请检查页面结构是否变动")
-                return None
-
-            print(f"[Scrapling] 成功获取 Nonce: {nonce}")
-
-            # Add rate limiting with random delay between requests
-            import time
-            import random
-            delay = random.uniform(1.0, 3.0)
-            print(f"[Scrapling] 等待 {delay:.2f} 秒以避免速率限制...")
-            time.sleep(delay)
-
-            scraped_vehicles = []
-
-            # Call step2 API to get vehicle list
-            step2_response = await self._call_api_with_scrapling(
-                page,
-                step2_url,
-                common_params,
-                nonce
-            )
-
-            if not step2_response or "cars" not in step2_response:
-                print(f"[Scrapling] Step2 API 返回无效数据: {step2_response}")
-                return {
-                    "success": False,
-                    "count": 0,
-                    "message": "Step2 API 返回无效数据",
-                    "vehicles": []
-                }
-
-            print(f"[Scrapling] Step2 原始回应: {step2_response}")
-
-            # Call step3 and calctotal APIs for each vehicle
-            for vehicle in step2_response.get("cars", []):
-                # Add delay between requests to avoid rate limiting
-                time.sleep(random.uniform(0.5, 1.5))
-
-                # Get additional vehicle details from step3 API
-                step3_params = common_params.copy()
-                step3_params["carid"] = vehicle.get("carid", "")
-                step3_response = await self._call_api_with_scrapling(
-                    page,
-                    step3_url,
-                    step3_params,
-                    nonce
-                )
-
-                # Get price calculation from calctotal API
-                calctotal_params = common_params.copy()
-                calctotal_params["carid"] = vehicle.get("carid", "")
-                calctotal_response = await self._call_api_with_scrapling(
-                    page,
-                    calctotal_url,
-                    calctotal_params,
-                    nonce
-                )
-
-                # Extract and format vehicle specifications
-                specs = {
-                    "transmission": vehicle.get("transmission", "Unknown"),
-                    "fuel_type": vehicle.get("fueltype", "Unknown"),
-                    "engine_size": f"{vehicle.get('enginesize', '0')}L",
-                }
-
-                # Build vehicle entry with scraped data
-                vehicle_entry = {
-                    "id": vehicle.get("carid", ""),
-                    "name": vehicle.get("name", "Unknown Vehicle"),
-                    "image_url": vehicle.get("imageurl", ""),
-                    "model_name": vehicle.get("vehiclecategory", "Unknown Model"),
-                    "berths": vehicle.get("numberofadults", 2),
-                    "transmission": "Unknown",
-                    "specs": specs,
-                    "price_nzd": calctotal_response.get("trip_total", 0.0),
-                    "pickup_date": common_params["pickupdate"],
-                    "return_date": common_params["dropoffdate"],
-                }
-
-                scraped_vehicles.append(vehicle_entry)
-
-            print(f"[Scrapling] 成功解析到 {len(scraped_vehicles)} 辆车型数据")
-
-            return {
-                "success": True,
-                "count": len(scraped_vehicles),
-                "message": f"使用 Scrapling 成功抓取并处理 {len(scraped_vehicles)} 辆车型数据",
-                "vehicles": scraped_vehicles
-            }
-
-        except Exception as e:
-            print(f"[Scrapling] 执行错误: {e}")
-            import traceback
-            traceback.print_exc()
-            return {
-                "success": False,
-                "count": 0,
-                "message": f"Scrapling 执行错误: {str(e)}",
-                "vehicles": []
-            }
 
     async def _extract_nonce_from_page_with_scrapling(
         self, page: Page
@@ -615,11 +485,14 @@ class PlaywrightScraper:
             # Navigate to the base URL
             await self.page.goto(base_url, timeout=timeout * 1000)
             
-            # Extract nonce using JavaScript evaluation
-            nonce = await self._extract_nonce_with_js()
-            if not nonce:
-                print("[Playwright] 未能抓取到 Nonce，请检查页面结构是否变动")
-                return None
+            # Extract nonce using JavaScript evaluation (only for rental mode)
+            scrape_mode = config_data.get("scrape_mode", "rental")
+            nonce = None
+            if scrape_mode == "rental":
+                nonce = await self._extract_nonce_with_js()
+                if not nonce:
+                    print("[Playwright] 未能抓取到 Nonce，请检查页面结构是否变动")
+                    return None
             
             print(f"[Playwright] 成功获取 Nonce: {nonce}")
             
@@ -630,7 +503,19 @@ class PlaywrightScraper:
 
             scraped_vehicles = []
 
-            # Call step2 API to get vehicle list
+            # For general or playwright scraping mode, return HTML content instead of calling APIs
+            scrape_mode = config_data.get("scrape_mode", "rental")
+            if scrape_mode in ["general", "playwright"]:
+                html_content = await self.page.content()
+                print(f"[Playwright] 成功获取页面 HTML 内容 ({len(html_content)} 字节)")
+                return {
+                    "success": True,
+                    "count": 1,
+                    "message": "General scraping completed",
+                    "html": html_content
+                }
+
+            # Call step2 API to get vehicle list (rental mode only)
             step2_url = config_data.get(
                 "step2_url",
                 "https://getlostinnz.co.nz/wp-json/getlost/v1/rcm/step2"

@@ -8,6 +8,13 @@ import discord
 import gradio as gr
 import spaces
 
+# FastAPI 别名 - 用于 uvicorn app:app 命令
+try:
+    from src.api.agent_server import create_app as app
+except ImportError:
+    # Fallback for when src is not available
+    app = None
+
 # 延迟读取 settings
 def get_settings():
     try:
